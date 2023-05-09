@@ -1,0 +1,4045 @@
+From 9c5e1ccd05eba376c983214a838779812aa66ced Mon Sep 17 00:00:00 2001
+From: Yoonseok Ko <ysko@meta.com>
+Date: Tue, 25 Apr 2023 00:39:25 -0700
+Subject: [PATCH] [ddinfer] Data-driven Infer Initial commit
+
+---
+ infer/src/IR/Procdesc.ml                 |  72 +++
+ infer/src/IR/Procdesc.mli                |   4 +
+ infer/src/absint/AbstractDomain.ml       |   9 +
+ infer/src/absint/AbstractDomain.mli      |  13 +
+ infer/src/absint/AbstractInterpreter.ml  | 733 ++++++++++++++++++++++-
+ infer/src/absint/AbstractInterpreter.mli |   8 +
+ infer/src/absint/MLVector.ml             |  31 +
+ infer/src/absint/MLVector.mli            |  21 +
+ infer/src/absint/ProcCfg.ml              |   6 +
+ infer/src/absint/ProcCfg.mli             |   2 +
+ infer/src/absint/TransferFunctions.ml    |  40 ++
+ infer/src/absint/TransferFunctions.mli   |  50 ++
+ infer/src/absint/dune                    |   2 +-
+ infer/src/backend/CallbackOfChecker.ml   |   5 +
+ infer/src/backend/CallbackOfChecker.mli  |   4 +
+ infer/src/backend/registerCheckers.ml    |  14 +-
+ infer/src/base/Checker.ml                |   9 +
+ infer/src/base/Checker.mli               |   1 +
+ infer/src/base/Config.ml                 | 226 ++++++-
+ infer/src/base/Config.mli                |  32 +
+ infer/src/base/Dump.ml                   |  77 +++
+ infer/src/base/Dump.mli                  |  24 +
+ infer/src/base/ResultsDirEntryName.ml    |  36 ++
+ infer/src/base/ResultsDirEntryName.mli   |   6 +
+ infer/src/base/dune                      |   2 +-
+ infer/src/checkers/cg.ml                 |  28 +
+ infer/src/checkers/cg.mli                |  11 +
+ infer/src/dune.in                        |   2 +-
+ infer/src/integration/DotReports.ml      | 115 ++++
+ infer/src/integration/DotReports.mli     |  11 +
+ infer/src/integration/Driver.ml          |   2 +
+ infer/src/istd/IntMap.ml                 |   9 +
+ infer/src/istd/IntMap.mli                |   8 +
+ infer/src/istd/UnionFind.ml              |   6 +-
+ infer/src/istd/UnionFind.mli             |   2 +-
+ infer/src/pulse/DumpTrace.ml             | 342 +++++++++++
+ infer/src/pulse/DumpTrace.mli            |  22 +
+ infer/src/pulse/Pulse.ml                 | 264 +++++---
+ infer/src/pulse/PulseAbductiveDomain.ml  |  75 ++-
+ infer/src/pulse/PulseAbductiveDomain.mli |  17 +-
+ infer/src/pulse/PulseAbstractValue.ml    |   2 +
+ infer/src/pulse/PulseAbstractValue.mli   |   2 +
+ infer/src/pulse/PulseBaseDomain.ml       |  28 +
+ infer/src/pulse/PulseBaseDomain.mli      |   3 +
+ infer/src/pulse/PulseBaseMemory.ml       |   2 +
+ infer/src/pulse/PulseDeadTrace.ml        | 143 +++++
+ infer/src/pulse/PulseDeadTrace.mli       |  37 ++
+ infer/src/pulse/PulseDomainInterface.ml  |   1 +
+ infer/src/pulse/PulseExecutionDomain.ml  |  46 ++
+ infer/src/pulse/PulseExecutionDomain.mli |  16 +-
+ infer/src/pulse/PulseFormula.ml          |  16 +-
+ infer/src/pulse/PulseFormula.mli         |   3 +
+ infer/src/pulse/PulseInterproc.ml        |  21 +-
+ infer/src/pulse/PulseModels.ml           |  13 +-
+ infer/src/pulse/PulseOperations.ml       |  46 +-
+ infer/src/pulse/PulsePathCondition.ml    |  33 +-
+ infer/src/pulse/PulsePathCondition.mli   |   3 +
+ infer/src/pulse/PulsePathHistory.ml      | 159 +++++
+ infer/src/pulse/PulsePathHistory.mli     |  52 ++
+ infer/src/pulse/PulseSkippedCalls.ml     |   3 +-
+ infer/src/pulse/PulseSummary.ml          |   4 +
+ infer/src/pulse/PulseSummary.mli         |   2 +
+ infer/src/pulse/dune                     |   2 +-
+ opam                                     |   1 +
+ opam.locked                              |   6 +-
+ 65 files changed, 2842 insertions(+), 143 deletions(-)
+ create mode 100644 infer/src/absint/MLVector.ml
+ create mode 100644 infer/src/absint/MLVector.mli
+ create mode 100644 infer/src/base/Dump.ml
+ create mode 100644 infer/src/base/Dump.mli
+ create mode 100644 infer/src/checkers/cg.ml
+ create mode 100644 infer/src/checkers/cg.mli
+ create mode 100644 infer/src/integration/DotReports.ml
+ create mode 100644 infer/src/integration/DotReports.mli
+ create mode 100644 infer/src/istd/IntMap.ml
+ create mode 100644 infer/src/istd/IntMap.mli
+ create mode 100644 infer/src/pulse/DumpTrace.ml
+ create mode 100644 infer/src/pulse/DumpTrace.mli
+ create mode 100644 infer/src/pulse/PulseDeadTrace.ml
+ create mode 100644 infer/src/pulse/PulseDeadTrace.mli
+ create mode 100644 infer/src/pulse/PulsePathHistory.ml
+ create mode 100644 infer/src/pulse/PulsePathHistory.mli
+
+diff --git a/infer/src/IR/Procdesc.ml b/infer/src/IR/Procdesc.ml
+index 5464dbfe9..c8cebde56 100644
+--- a/infer/src/IR/Procdesc.ml
++++ b/infer/src/IR/Procdesc.ml
+@@ -172,6 +172,8 @@ module Node = struct
+ 
+   let pp f node = pp_id f (get_id node)
+ 
++  let uniq_int id = id
++
+   module NodeSet = Caml.Set.Make (struct
+     type t = node
+ 
+@@ -433,6 +435,76 @@ module Node = struct
+     let succs = get_succs node in
+     let preds = get_preds node in
+     NodeKey.compute node ~simple_key ~succs ~preds
++
++  let i_to_b i n =
++    let rec iter k lst =
++      if Int.equal k 0 then lst
++      else
++        let v =
++          if Int.equal k i then 1
++          else 0
++        in
++        iter (k-1) (v::lst)
++    in
++    iter n []
++
++  let feature_vector node =
++    let v2 =
++      match get_kind node with
++          | Start_node -> 1
++          | Exit_node -> 2
++          | Join_node -> 3
++          | Prune_node (true, _, _) -> 4
++          | Prune_node (false, _, _) -> 5
++          | Skip_node _ -> 6
++          | Stmt_node kind ->
++              match kind with
++              | AssertionFailure -> 7
++              | BetweenJoinAndExit -> 8
++              | BinaryConditionalStmtInit -> 9
++              | BinaryOperatorStmt _ -> 10
++              | Call _ -> 11
++              | CallObjCNew -> 12
++              | ClassCastException -> 13
++              | ConditionalStmtBranch -> 14
++              | ConstructorInit -> 15
++              | CXXDynamicCast -> 16
++              | CXXNewExpr -> 17
++              | CXXStdInitializerListExpr -> 18
++              | CXXTypeidExpr -> 19
++              | DeclStmt -> 20
++              | DefineBody -> 21
++              | Destruction _ -> 22
++              | ExceptionHandler -> 23
++              | ExceptionsSink -> 24
++              | ExprWithCleanups -> 25
++              | FinallyBranch -> 26
++              | GCCAsmStmt -> 27
++              | GenericSelectionExpr -> 28
++              | IfStmtBranch -> 29
++              | InitializeDynamicArrayLength -> 30
++              | InitListExp -> 31
++              | MessageCall _ -> 32
++              | MethodBody -> 33
++              | MonitorEnter -> 34
++              | MonitorExit -> 35
++              | ObjCCPPThrow -> 36
++              | OutOfBound -> 37
++              | ReturnStmt -> 38
++              | Scope _ -> 39
++              | Skip _ -> 40
++              | SwitchStmt -> 41
++              | ThisNotNull -> 42
++              | Throw -> 43
++              | ThrowNPE -> 44
++              | UnaryOperator -> 45
++              | FallbackNode -> 46
++    in
++    let vs2: int list = i_to_b v2 46 in
++    let v3 = Instrs.count (get_instrs node) in
++    let v4 = List.length (get_preds node) in
++    let v5 = List.length (get_succs node) in
++    vs2 @ [v3; v4; v5]
+ end
+ 
+ (* =============== END of module Node =============== *)
+diff --git a/infer/src/IR/Procdesc.mli b/infer/src/IR/Procdesc.mli
+index eae14467d..e09708278 100644
+--- a/infer/src/IR/Procdesc.mli
++++ b/infer/src/IR/Procdesc.mli
+@@ -184,6 +184,10 @@ module Node : sig
+   val pp_stmt : Format.formatter -> stmt_nodekind -> unit
+ 
+   val compute_key : t -> NodeKey.t
++
++  val feature_vector : t -> int list
++
++  val uniq_int : id -> int
+ end
+ 
+ (** Map with node id keys. *)
+diff --git a/infer/src/absint/AbstractDomain.ml b/infer/src/absint/AbstractDomain.ml
+index b11f3541a..762199874 100644
+--- a/infer/src/absint/AbstractDomain.ml
++++ b/infer/src/absint/AbstractDomain.ml
+@@ -24,6 +24,15 @@ module type NoJoin = sig
+   val leq : lhs:t -> rhs:t -> bool
+ end
+ 
++module type NoJoinForML = sig
++  include PrettyPrintable.PrintableType
++
++  val leq : lhs:t -> rhs:t -> bool
++  val feature_vector : t -> int list
++  val keep_alternatives : t -> string * int -> t
++  val is_dead : string * int -> t -> bool
++end
++
+ module type S = sig
+   include NoJoin
+ 
+diff --git a/infer/src/absint/AbstractDomain.mli b/infer/src/absint/AbstractDomain.mli
+index f6a379885..43b553fbe 100644
+--- a/infer/src/absint/AbstractDomain.mli
++++ b/infer/src/absint/AbstractDomain.mli
+@@ -26,6 +26,19 @@ module type NoJoin = sig
+   (** the implication relation: [lhs <= rhs] means [lhs |- rhs] *)
+ end
+ 
++module type NoJoinForML = sig
++  include PrettyPrintable.PrintableType
++
++  val leq : lhs:t -> rhs:t -> bool
++  (** the implication relation: [lhs <= rhs] means [lhs |- rhs] *)
++
++  val feature_vector : t -> int list
++
++  val keep_alternatives : t -> string * int -> t
++
++  val is_dead : string * int -> t -> bool
++end
++
+ module type S = sig
+   include NoJoin
+ 
+diff --git a/infer/src/absint/AbstractInterpreter.ml b/infer/src/absint/AbstractInterpreter.ml
+index 06c017a89..b0cbafca5 100644
+--- a/infer/src/absint/AbstractInterpreter.ml
++++ b/infer/src/absint/AbstractInterpreter.ml
+@@ -93,6 +93,21 @@ module type NodeTransferFunctions = sig
+     -> exec_instr:(Domain.t -> Sil.instr -> Domain.t)
+     -> Domain.t
+     -> _ Instrs.t
++    -> CFG.Node.t
++    -> Domain.t
++  (** specifies how to symbolically execute the instructions of a node, using [exec_instr] to go
++      over a single instruction *)
++end
++
++module type MLNodeTransferFunctions = sig
++  include TransferFunctions.SILML
++
++  val exec_node_instrs :
++       Domain.t State.t option
++    -> exec_instr:(Domain.t -> Sil.instr -> Domain.t)
++    -> Domain.t
++    -> _ Instrs.t
++    -> CFG.Node.t
+     -> Domain.t
+   (** specifies how to symbolically execute the instructions of a node, using [exec_instr] to go
+       over a single instruction *)
+@@ -102,7 +117,7 @@ end
+ module SimpleNodeTransferFunctions (T : TransferFunctions.SIL) = struct
+   include T
+ 
+-  let exec_node_instrs _old_state_opt ~exec_instr pre instrs =
++  let exec_node_instrs _old_state_opt ~exec_instr pre instrs _node =
+     Instrs.fold ~init:pre instrs ~f:exec_instr
+ end
+ 
+@@ -199,7 +214,7 @@ struct
+           Domain.join post_disjuncts disjuncts' ) )
+ 
+ 
+-  let exec_node_instrs old_state_opt ~exec_instr pre instrs =
++  let exec_node_instrs old_state_opt ~exec_instr pre instrs _node =
+     let is_new_pre disjunct =
+       match old_state_opt with
+       | None ->
+@@ -222,6 +237,388 @@ struct
+   let pp_session_name node f = T.pp_session_name node f
+ end
+ 
++module MakeDisjunctiveTransferFunctionsML
++    (T : TransferFunctions.DisjReadyWithML)
++    (DConfig : TransferFunctions.DisjunctiveConfig) =
++struct
++  include MakeDisjunctiveTransferFunctions(T)(DConfig)
++
++  module Domain = struct
++    include Domain
++    let mark (node: CFG.Node.t) s =
++      let cfg_node = CFG.Node.underlying_node node in
++      let proc = Procdesc.Node.get_proc_name cfg_node in
++      let proc = Procname.to_unique_id proc in
++      let node = Procdesc.Node.uniq_int (Procdesc.Node.get_id cfg_node) in
++      T.Domain.keep_alternatives s (proc, node)
++    let is_not_dead (node: CFG.Node.t) t =
++      let cfg_node = CFG.Node.underlying_node node in
++      let proc = Procdesc.Node.get_proc_name cfg_node in
++      let proc = Procname.to_unique_id proc in
++      let node = Procdesc.Node.uniq_int (Procdesc.Node.get_id cfg_node) in
++      not (T.Domain.is_dead (proc, node) t)
++    let feature_pp fmt lst =
++      F.pp_print_string fmt "[ ";
++      List.iter lst ~f:(fun v -> F.pp_print_int fmt v;F.pp_print_string fmt ", ") ;
++      F.pp_print_string fmt " ]"
++
++    let tfst (v,_,_) = v
++    let tsnd (_,v,_) = v
++    let ttrd (_,_,v) = v
++    let rec selected_log (list: (int list * float * float) list) k =
++      if k <= 0 then
++        match list with
++        | [] -> ()
++        | hd::tl ->
++           L.d_printfln "* Droped(%f <- %f): %a" (tsnd hd) (ttrd hd) feature_pp (tfst hd);
++           selected_log tl k
++      else
++        match list with
++        | [] -> ()
++        | hd::tl ->
++           L.d_printfln "* Selected(%f <- %f) %d: %a" (tsnd hd) (ttrd hd) k feature_pp (tfst hd);
++           selected_log tl (k - 1)
++
++    let rec partition fn l1 l2 =
++      match (l1, l2) with
++      | ([], _) | (_, []) -> ([], [], [], [])
++      | (hd::tl, hd2::tl2) ->
++         let a1, a2, b1, b2 = partition fn tl tl2 in
++         if fn hd2 then (hd::a1, a2, hd2::b1, b2)
++         else (a1, hd::a2, b1, hd2::b2)
++
++    let rec qsort l1 l2 =
++      match (l1, l2) with
++      | ([], _) | (_, []) -> []
++      | (hd::tl, hd2::tl2) ->
++         let x = hd2 in
++         let s1, l1, s2, l2 = partition (fun (y: float) -> Float.compare x y < 0) tl tl2 in
++         let a1 = qsort s1 s2 in
++         let b1 = qsort l1 l2 in
++         a1 @ (hd::b1)
++
++    let rec select list k =
++      if k <= 0 then []
++      else
++        match list with
++        | [] -> []
++        | hd::tl -> hd::(select tl (k - 1))
++
++    let rec select_mark list k node =
++      if k <= 0 then []
++      else
++        match list with
++        | [] -> []
++        | hd::tl -> (mark node hd)::(select_mark tl (k - 1) node)
++
++    let select_top_k =
++      if Config.debug_mode then
++        fun list (vector_list: int list list) (scores: float list) (scores_old: float list) k ->
++        let sorted = qsort list scores in
++        let rec zip a b c =
++          match a, b, c with
++          | [], [], [] -> []
++          | h1::t1, h2::t2, h3::t3 -> (h1,h2,h3)::(zip t1 t2 t3)
++          | _ -> raise Exit
++        in
++        let v = zip vector_list scores_old scores in
++        let sorted_list = qsort v scores in
++        selected_log sorted_list k;
++        select sorted k
++      else
++        fun list _ scores _ k ->
++        let sorted = qsort list scores in
++        select sorted k
++
++    let orig_join : t -> t -> t =
++      let rec list_rev_append l1 l2 n =
++        match l1 with hd :: tl when n > 0 -> list_rev_append tl (hd :: l2) (n - 1) | _ -> l2
++      in
++      fun lhs rhs ->
++        if phys_equal lhs rhs then lhs
++        else
++          let (`UnderApproximateAfter n) = DConfig.join_policy in
++          let lhs_length = List.length lhs in
++          if lhs_length >= n then lhs else list_rev_append rhs lhs (n - lhs_length)
++
++    let orig_join_train : CFG.Node.t -> t -> t -> t =
++      let rec list_rev_append l1 l2 n =
++        match l1 with hd :: tl when n > 0 -> list_rev_append tl (hd :: l2) (n - 1) | _ -> l2
++      in
++      fun node lhs rhs ->
++        if phys_equal lhs rhs then lhs
++        else
++          begin
++            let is_not_dead = is_not_dead node in
++            let lhs = List.filter ~f:is_not_dead lhs in
++            let rhs = List.filter ~f:is_not_dead rhs in
++            let lhs_length = List.length lhs in
++            let rhs_length = List.length rhs in
++            let (`UnderApproximateAfter n) = DConfig.join_policy in
++            let rtn = if lhs_length >= n then lhs else (list_rev_append rhs lhs (n - lhs_length)) in
++            if lhs_length + rhs_length > n then List.map ~f:(mark node) rtn
++            else rtn
++          end
++    let top_k_join compare: (int list list -> float list) -> (int list list -> float list) -> CFG.Node.t -> t -> t -> t =
++      let rec qsort l1 l2 =
++        match (l1, l2) with
++        | ([], _) | (_, []) -> []
++        | (hd::tl, hd2::tl2) ->
++           let x = hd2 in
++           let s1, l1, s2, l2 = partition (fun (y: float) -> compare x y < 0) tl tl2 in
++           let a1 = qsort s1 s2 in
++           let b1 = qsort l1 l2 in
++           a1 @ (hd::b1)
++      in
++      let select_top_k =
++        if Config.debug_mode then
++          fun list (vector_list: int list list) (scores: float list) (scores_old: float list) k ->
++            let sorted = qsort list scores in
++            let rec zip a b c =
++              match a, b, c with
++              | [], [], [] -> []
++              | h1::t1, h2::t2, h3::t3 -> (h1,h2,h3)::(zip t1 t2 t3)
++              | _ -> raise Exit
++            in
++            let v = zip vector_list scores_old scores in
++            let sorted_list = qsort v scores in
++            selected_log sorted_list k;
++            select sorted k
++        else
++          fun list _ scores _ k ->
++            let sorted = qsort list scores in
++            select sorted k
++      in
++      (** until here ***)
++      let rec finclude i lst list =
++        match lst, list with
++        | [], _ -> []
++        | _, [] -> list
++        | hd::tl, hd2::tl2 ->
++            if phys_equal hd i then hd2::(finclude (i+1) tl tl2)
++            else finclude (i+1) lst tl2
++      in
++      let rec fexclude i lst list =
++        match lst, list with
++        | [], _ -> list
++        | _, [] -> list
++        | hd::tl, hd2::tl2 ->
++            if phys_equal hd i then fexclude (i+1) tl tl2
++            else hd2::(fexclude (i+1) lst tl2)
++      in
++      let filter =
++        if not (List.is_empty Config.pulse_feature_filter_out) then
++          fun int_list ->
++            List.map ~f:(fexclude 0 Config.pulse_feature_filter_out) int_list
++        else
++          match Config.pulse_feature_filter_only with
++          | None -> fun x -> x
++          | Some(lst) ->
++              fun int_list ->
++                List.map ~f:(finclude 0 lst) int_list
++      in
++      let (`UnderApproximateAfter n) = DConfig.join_policy in
++      if Config.debug_mode then
++        fun fn_score fn_score_old node lhs rhs ->
++          if phys_equal lhs rhs then lhs
++          else
++            let list = lhs @ rhs in
++            let len = List.length list in
++            if len <= n then list
++            else
++              let node_features: int list = CFG.Node.feature_vector node in
++              let int_list = List.map ~f:(fun vs ->
++                  node_features @ T.Domain.feature_vector vs) list
++              in
++              let int_list = filter int_list in
++              let scores_list = fn_score int_list in
++              let scores_list_old = fn_score_old int_list in
++              select_top_k list int_list scores_list scores_list_old n
++      else
++        fun fn_score _ node lhs rhs ->
++          if phys_equal lhs rhs then lhs
++          else
++            let list = lhs @ rhs in
++            let len = List.length list in
++            if len <= n then list
++            else
++              let node_features: int list = CFG.Node.feature_vector node in
++              let int_list = List.map ~f:(fun vs ->
++                  node_features @ T.Domain.feature_vector vs) list
++              in
++              let int_list = filter int_list in
++              let scores_list = fn_score int_list in
++              select_top_k list int_list scores_list scores_list n
++
++    let top_k_join_train compare: (int list list -> float list) -> (int list list -> float list) -> CFG.Node.t -> t -> t -> t =
++      let rec qsort l1 l2 =
++        match (l1, l2) with
++        | ([], _) | (_, []) -> []
++        | (hd::tl, hd2::tl2) ->
++           let x = hd2 in
++           let s1, l1, s2, l2 = partition (fun (y: float) -> compare x y < 0) tl tl2 in
++           let a1 = qsort s1 s2 in
++           let b1 = qsort l1 l2 in
++           a1 @ (hd::b1)
++      in
++      let select_top_k =
++        if Config.debug_mode then
++          fun list (vector_list: int list list) (scores: float list) (scores_old: float list) k (node: CFG.Node.t) ->
++            let sorted = qsort list scores in
++            let rec zip a b c =
++              match a, b, c with
++              | [], [], [] -> []
++              | h1::t1, h2::t2, h3::t3 -> (h1,h2,h3)::(zip t1 t2 t3)
++              | _ -> raise Exit
++            in
++            let v = zip vector_list scores_old scores in
++            let sorted_list = qsort v scores in
++            selected_log sorted_list k;
++            select_mark sorted k node
++        else
++          fun list _ scores _ k node ->
++            let sorted = qsort list scores in
++            select_mark sorted k node
++      in
++      (** until here ***)
++      let rec finclude i lst list =
++        match lst, list with
++        | [], _ -> []
++        | _, [] -> list
++        | hd::tl, hd2::tl2 ->
++            if phys_equal hd i then hd2::(finclude (i+1) tl tl2)
++            else finclude (i+1) lst tl2
++      in
++      let rec fexclude i lst list =
++        match lst, list with
++        | [], _ -> list
++        | _, [] -> list
++        | hd::tl, hd2::tl2 ->
++            if phys_equal hd i then fexclude (i+1) tl tl2
++            else hd2::(fexclude (i+1) lst tl2)
++      in
++      let filter =
++        if not (List.is_empty Config.pulse_feature_filter_out) then
++          fun int_list ->
++            List.map ~f:(fexclude 0 Config.pulse_feature_filter_out) int_list
++        else
++          match Config.pulse_feature_filter_only with
++          | None -> fun x -> x
++          | Some(lst) ->
++              fun int_list ->
++                List.map ~f:(finclude 0 lst) int_list
++      in
++      let (`UnderApproximateAfter n) = DConfig.join_policy in
++      if Config.debug_mode then
++        fun fn_score fn_score_old node lhs rhs ->
++          if phys_equal lhs rhs then lhs
++          else
++            let list = lhs @ rhs in
++            let len = List.length list in
++            if len <= n then list
++            else
++              let node_features: int list = CFG.Node.feature_vector node in
++              let int_list = List.map ~f:(fun vs ->
++                  node_features @ T.Domain.feature_vector vs) list
++              in
++              let int_list = filter int_list in
++              let scores_list = fn_score int_list in
++              let scores_list_old = fn_score_old int_list in
++              select_top_k list int_list scores_list scores_list_old n node
++      else
++        fun fn_score _ node lhs rhs ->
++          if phys_equal lhs rhs then lhs
++          else
++            let list = lhs @ rhs in
++            let len = List.length list in
++            if len <= n then list
++            else
++              let node_features: int list = CFG.Node.feature_vector node in
++              let int_list = List.map ~f:(fun vs ->
++                  node_features @ T.Domain.feature_vector vs) list
++              in
++              let int_list = filter int_list in
++              let scores_list = fn_score int_list in
++              select_top_k list int_list scores_list scores_list n node
++
++    (** deprecated in ML mode. *)
++    let join : t -> t -> t = fun _ _ -> raise Exit
++
++    let random_join_train : CFG.Node.t -> t -> t -> t =
++      let (`UnderApproximateAfter n) = DConfig.join_policy in
++      fun node lhs rhs ->
++        if phys_equal lhs rhs then lhs
++        else
++          let is_not_dead = is_not_dead node in
++          let lhs = List.filter ~f:is_not_dead lhs in
++          let rhs = List.filter ~f:is_not_dead rhs in
++          let list = lhs @ rhs in
++          let len = List.length list in
++          if len <= n then list
++          else
++            let int_list = List.map ~f:(fun _ -> []) list in
++            let scores_list = List.map ~f:(fun _ -> Random.float 10.0) list in
++            let rtn = select_top_k list int_list scores_list scores_list n in
++            List.map ~f:(mark node) rtn
++
++    let sjoin =
++      if Config.pulse_random_mode then random_join_train
++      else if Config.pulse_train_mode then
++        match Config.pulse_join_train with
++        | Some(fn) ->
++            let top_k_join = top_k_join_train (fun x y -> Float.compare x y) fn fn in
++            fun node -> top_k_join node
++        | None ->
++           orig_join_train
++      else
++        match Config.pulse_join_select with
++        | Some(fn, fn_old) ->
++            let top_k_join = top_k_join Float.compare fn fn_old in
++            fun node -> top_k_join node
++        | None ->
++           if Config.pulse_join_cover then
++             orig_join_train
++           else
++             fun _node -> orig_join
++  end
++
++  let exec_instr pre_disjuncts analysis_data node instr =
++    List.foldi pre_disjuncts ~init:[] ~f:(fun i post_disjuncts pre_disjunct ->
++        let should_skip =
++          let (`UnderApproximateAfter n) = DConfig.join_policy in
++          List.length post_disjuncts >= n
++        in
++        if should_skip && (Option.is_none Config.pulse_join_select) then (
++          L.d_printfln "@[<v2>Reached max disjuncts limit, skipping disjunct #%d@;@]" i ;
++          post_disjuncts )
++        else (
++          L.d_printfln "@[<v2>Executing instruction from disjunct #%d@;" i ;
++          let disjuncts' = T.exec_instr pre_disjunct analysis_data node instr in
++          ( if Config.write_html then
++            let n = List.length disjuncts' in
++            L.d_printfln "@]@\n@[Got %d disjunct%s back@]" n (if Int.equal n 1 then "" else "s") ) ;
++          Domain.sjoin node post_disjuncts disjuncts' ) )
++
++  let exec_node_instrs old_state_opt ~exec_instr pre instrs node =
++    let is_new_pre disjunct =
++      match old_state_opt with
++      | None ->
++          true
++      | Some {State.pre= previous_pre; _} ->
++          not (List.mem ~equal:phys_equal previous_pre disjunct)
++    in
++    let current_post = match old_state_opt with None -> [] | Some {State.post; _} -> post in
++    List.foldi pre ~init:current_post ~f:(fun i post_disjuncts pre_disjunct ->
++        if is_new_pre pre_disjunct then (
++          L.d_printfln "@[<v2>Executing node from disjunct #%d@;" i ;
++          let disjuncts' = Instrs.fold ~init:[pre_disjunct] instrs ~f:exec_instr in
++          L.d_printfln "@]@\n" ;
++          Domain.sjoin node post_disjuncts disjuncts' )
++        else (
++          L.d_printfln "@[Skipping already-visited disjunct #%d@]@;" i ;
++          post_disjuncts ) )
++end
++
+ module AbstractInterpreterCommon (TransferFunctions : NodeTransferFunctions) = struct
+   module CFG = TransferFunctions.CFG
+   module Node = CFG.Node
+@@ -326,7 +723,7 @@ module AbstractInterpreterCommon (TransferFunctions : NodeTransferFunctions) = s
+     in
+     (* hack to ensure that we call `exec_instr` on a node even if it has no instructions *)
+     let instrs = if Instrs.is_empty instrs then Instrs.singleton Sil.skip_instr else instrs in
+-    TransferFunctions.exec_node_instrs old_state_opt ~exec_instr pre instrs
++    TransferFunctions.exec_node_instrs old_state_opt ~exec_instr pre instrs node
+ 
+ 
+   (* Note on narrowing operations: we defines the narrowing operations simply to take a smaller one.
+@@ -427,6 +824,211 @@ module AbstractInterpreterCommon (TransferFunctions : NodeTransferFunctions) = s
+     extract_post (Node.id (CFG.exit_node cfg)) inv_map
+ end
+ 
++module AbstractInterpreterCommonML (TransferFunctions : MLNodeTransferFunctions) = struct
++  module CFG = TransferFunctions.CFG
++  module Node = CFG.Node
++  module TransferFunctions = TransferFunctions
++  module InvariantMap = TransferFunctions.CFG.Node.IdMap
++  module Domain = TransferFunctions.Domain
++
++  type invariant_map = Domain.t State.t InvariantMap.t
++
++  (** extract the state of node [n] from [inv_map] *)
++  let extract_state node_id inv_map = InvariantMap.find_opt node_id inv_map
++
++  (** extract the postcondition of node [n] from [inv_map] *)
++  let extract_post node_id inv_map = extract_state node_id inv_map |> Option.map ~f:State.post
++
++  (** extract the precondition of node [n] from [inv_map] *)
++  let extract_pre node_id inv_map = extract_state node_id inv_map |> Option.map ~f:State.pre
++
++  let debug_absint_operation op =
++    let pp_op fmt op =
++      match op with
++      | `Join _ ->
++          F.pp_print_string fmt "JOIN"
++      | `Widen (num_iters, _) ->
++          F.fprintf fmt "WIDEN(num_iters= %d)" num_iters
++    in
++    let left, right, result = match op with `Join lrr | `Widen (_, lrr) -> lrr in
++    let pp_right f =
++      if phys_equal right left then F.pp_print_string f "= LEFT" else Domain.pp f right
++    in
++    let pp_result f =
++      if phys_equal result left then F.pp_print_string f "= LEFT"
++      else if phys_equal result right then F.pp_print_string f "= RIGHT"
++      else Domain.pp f result
++    in
++    L.d_printfln_escaped "%a@\n@\nLEFT:   %a@\nRIGHT:  %t@\nRESULT: %t@." pp_op op Domain.pp left
++      pp_right pp_result
++
++
++  (** reference to log errors only at the innermost recursive call *)
++  let logged_error = ref false
++
++  let dump_html ~pp_instr pre instr post_result =
++    let pp_post_error f (exn, _, instr) =
++      F.fprintf f "Analysis stopped in `%a` by error: %a."
++        (Sil.pp_instr ~print_types:false Pp.text)
++        instr Exn.pp exn
++    in
++    let pp_post f post =
++      match post with
++      | Ok astate_post ->
++          if phys_equal astate_post pre then F.pp_print_string f "STATE UNCHANGED"
++          else F.fprintf f "STATE:@\n@[%a@]" Domain.pp astate_post
++      | Error err ->
++          pp_post_error f err
++    in
++    let pp_all f =
++      (* we pass [pre] to [pp_instr] because HIL needs it to interpret temporary variables *)
++      match (pp_instr pre instr, post_result) with
++      | None, Ok _ ->
++          ()
++      | None, Error err ->
++          pp_post_error f err
++      | Some pp_instr, _ ->
++          Format.fprintf f "@[<h>INSTR=  %t@]@\n@\n%a@\n" pp_instr pp_post post_result
++    in
++    L.d_printfln_escaped "%t" pp_all
++
++
++  let exec_node_instrs old_state_opt ~pp_instr proc_data node pre =
++    let instrs = CFG.instrs node in
++    if Config.write_html then L.d_printfln_escaped "PRE STATE:@\n@[%a@]@\n" Domain.pp pre ;
++    let exec_instr pre instr =
++      AnalysisState.set_instr instr ;
++      let result =
++        try
++          let post = TransferFunctions.exec_instr pre proc_data node instr in
++          (* don't forget to reset this so we output messages for future errors too *)
++          logged_error := false ;
++          Ok post
++        with exn ->
++          (* delay reraising to get a chance to write the debug HTML *)
++          let backtrace = Caml.Printexc.get_raw_backtrace () in
++          Error (exn, backtrace, instr)
++      in
++      if Config.write_html then dump_html ~pp_instr pre instr result ;
++      match result with
++      | Ok post ->
++          post
++      | Error (exn, backtrace, instr) ->
++          ( match exn with
++          | TaskSchedulerTypes.ProcnameAlreadyLocked _ ->
++              (* this isn't an error; don't log it *)
++              ()
++          | _ ->
++              if not !logged_error then (
++                L.internal_error "In instruction %a@\n"
++                  (Sil.pp_instr ~print_types:true Pp.text)
++                  instr ;
++                logged_error := true ) ) ;
++          Caml.Printexc.raise_with_backtrace exn backtrace
++    in
++    (* hack to ensure that we call `exec_instr` on a node even if it has no instructions *)
++    let instrs = if Instrs.is_empty instrs then Instrs.singleton Sil.skip_instr else instrs in
++    TransferFunctions.exec_node_instrs old_state_opt ~exec_instr pre instrs node
++
++
++  (* Note on narrowing operations: we defines the narrowing operations simply to take a smaller one.
++     So, as of now, the termination of narrowing is not guaranteed in general. *)
++  let exec_node ~pp_instr analysis_data node ~is_loop_head ~is_narrowing astate_pre inv_map =
++    let node_id = Node.id node in
++    let update_inv_map inv_map new_pre old_state_opt =
++      let new_post = exec_node_instrs old_state_opt ~pp_instr analysis_data node new_pre in
++      let new_visit_count =
++        match old_state_opt with
++        | None ->
++            VisitCount.first_time
++        | Some {State.visit_count; _} ->
++            VisitCount.succ visit_count
++      in
++      InvariantMap.add node_id
++        {State.pre= new_pre; post= new_post; visit_count= new_visit_count}
++        inv_map
++    in
++    let inv_map, converged =
++      if InvariantMap.mem node_id inv_map then
++        let old_state = InvariantMap.find node_id inv_map in
++        let new_pre =
++          if is_loop_head && not is_narrowing then (
++            let num_iters = (old_state.State.visit_count :> int) in
++            let prev = old_state.State.pre in
++            let next = astate_pre in
++            let res = Domain.widen ~prev ~next ~num_iters in
++            if Config.write_html then debug_absint_operation (`Widen (num_iters, (prev, next, res))) ;
++            res )
++          else astate_pre
++        in
++        if
++          if is_narrowing then
++            (old_state.State.visit_count :> int) > Config.max_narrows
++            || Domain.leq ~lhs:old_state.State.pre ~rhs:new_pre
++          else Domain.leq ~lhs:new_pre ~rhs:old_state.State.pre
++        then (inv_map, ReachedFixPoint)
++        else if is_narrowing && not (Domain.leq ~lhs:new_pre ~rhs:old_state.State.pre) then (
++          L.d_printfln "Terminate narrowing because old and new states are not comparable: %a@."
++            Node.pp_id node_id ;
++          (inv_map, ReachedFixPoint) )
++        else (update_inv_map inv_map new_pre (Some old_state), DidNotReachFixPoint)
++      else
++        (* first time visiting this node *)
++        (update_inv_map inv_map astate_pre None, DidNotReachFixPoint)
++    in
++    ( match converged with
++    | ReachedFixPoint ->
++        L.d_printfln "Fixpoint reached.@."
++    | DidNotReachFixPoint ->
++        () ) ;
++    (inv_map, converged)
++
++
++  (* shadowed for HTML debug *)
++  let exec_node ~pp_instr proc_data node ~is_loop_head ~is_narrowing astate_pre inv_map =
++    AnalysisCallbacks.html_debug_new_node_session (Node.underlying_node node)
++      ~kind:(if is_narrowing then `ExecNodeNarrowing else `ExecNode)
++      ~pp_name:(TransferFunctions.pp_session_name node)
++      ~f:(fun () ->
++        exec_node ~pp_instr proc_data node ~is_loop_head ~is_narrowing astate_pre inv_map )
++
++
++  let compute_pre cfg node inv_map =
++    let extract_post_ pred = extract_post (Node.id pred) inv_map in
++    CFG.fold_preds cfg node ~init:None ~f:(fun joined_post_opt pred ->
++        match extract_post_ pred with
++        | None ->
++            joined_post_opt
++        | Some post as some_post -> (
++          match joined_post_opt with
++          | None ->
++              some_post
++          | Some joined_post ->
++              let res = Domain.sjoin node post joined_post in
++              if Config.write_html then debug_absint_operation (`Join (joined_post, post, res)) ;
++              Some res ) )
++
++
++  (* shadowed for HTML debug *)
++  let compute_pre cfg node inv_map =
++    AnalysisCallbacks.html_debug_new_node_session (Node.underlying_node node) ~kind:`ComputePre
++      ~pp_name:(TransferFunctions.pp_session_name node) ~f:(fun () -> compute_pre cfg node inv_map)
++
++
++  (** compute and return an invariant map for [pdesc] *)
++  let make_exec_pdesc ~exec_cfg_internal analysis_data ~do_narrowing ~initial proc_desc =
++    exec_cfg_internal ~pp_instr:pp_sil_instr (CFG.from_pdesc proc_desc) analysis_data ~do_narrowing
++      ~initial
++
++
++  (** compute and return the postcondition of [pdesc] *)
++  let make_compute_post ~exec_cfg_internal ?(pp_instr = pp_sil_instr) analysis_data ~do_narrowing
++      ~initial proc_desc =
++    let cfg = CFG.from_pdesc proc_desc in
++    let inv_map = exec_cfg_internal ~pp_instr cfg analysis_data ~do_narrowing ~initial in
++    extract_post (Node.id (CFG.exit_node cfg)) inv_map
++end
++
+ module MakeWithScheduler
+     (Scheduler : Scheduler.S)
+     (TransferFunctions : TransferFunctions.SIL with module CFG = Scheduler.CFG) =
+@@ -599,8 +1201,133 @@ module MakeWTONode (TransferFunctions : NodeTransferFunctions) = struct
+   let compute_post ?(do_narrowing = false) = make_compute_post ~exec_cfg_internal ~do_narrowing
+ end
+ 
++module MakeWTONodeML (TransferFunctions : MLNodeTransferFunctions) = struct
++  include AbstractInterpreterCommonML (TransferFunctions)
++
++  let debug_wto wto node =
++    let underlying_node = Node.underlying_node node in
++    AnalysisCallbacks.html_debug_new_node_session underlying_node ~kind:`WTO
++      ~pp_name:(TransferFunctions.pp_session_name node) ~f:(fun () ->
++        let pp_node fmt node = node |> Node.id |> Node.pp_id fmt in
++        L.d_printfln "%a" (WeakTopologicalOrder.Partition.pp ~pp_node) wto ;
++        let loop_heads =
++          wto |> IContainer.to_rev_list ~fold:WeakTopologicalOrder.Partition.fold_heads |> List.rev
++        in
++        L.d_printfln "Loop heads: %a" (Pp.seq pp_node) loop_heads )
++
++
++  let exec_wto_node ~pp_instr cfg proc_data inv_map node ~is_loop_head ~is_narrowing =
++    match compute_pre cfg node inv_map with
++    | Some astate_pre ->
++        exec_node ~pp_instr proc_data node ~is_loop_head ~is_narrowing astate_pre inv_map
++    | None ->
++        L.(die InternalError) "Could not compute the pre of a node"
++
++
++  (* [WidenThenNarrow] mode is to narrow the outermost loops eagerly, so that over-approximated
++     widened values do not flow to the following code.
++
++     Problem: There are two phases for finding a fixpoint, widening and narrowing.  First, it finds
++     a fixpoint with widening, in function level.  After that, it finds a fixpoint with narrowing.
++     A problem is that sometimes an overly-approximated, imprecise, values by widening are flowed to
++     the following loops.  They are hard to narrow in the narrowing phase because there is a cycle
++     preventing it.
++
++     To mitigate the problem, it tries to do narrowing, in loop level, right after it found a
++     fixpoint of a loop.  Thus, it narrows before the widened values are flowed to the following
++     loops.  In order to guarantee the termination of the analysis, this eager narrowing is applied
++     only to the outermost loops or when the first visits of each loops. *)
++  type mode = Widen | WidenThenNarrow | Narrow
++
++  let is_narrowing_of = function Widen | WidenThenNarrow -> false | Narrow -> true
++
++  let rec exec_wto_component ~pp_instr cfg proc_data inv_map head ~is_loop_head ~mode
++      ~is_first_visit rest =
++    let is_narrowing = is_narrowing_of mode in
++    match exec_wto_node ~pp_instr cfg proc_data inv_map head ~is_loop_head ~is_narrowing with
++    | inv_map, ReachedFixPoint ->
++        if is_narrowing && is_first_visit then
++          exec_wto_rest ~pp_instr cfg proc_data inv_map head ~mode ~is_first_visit rest
++        else inv_map
++    | inv_map, DidNotReachFixPoint ->
++        exec_wto_rest ~pp_instr cfg proc_data inv_map head ~mode ~is_first_visit rest
++
++
++  and exec_wto_rest ~pp_instr cfg proc_data inv_map head ~mode ~is_first_visit rest =
++    let inv_map = exec_wto_partition ~pp_instr cfg proc_data ~mode ~is_first_visit inv_map rest in
++    exec_wto_component ~pp_instr cfg proc_data inv_map head ~is_loop_head:true ~mode
++      ~is_first_visit:false rest
++
++
++  and exec_wto_partition ~pp_instr cfg proc_data ~mode ~is_first_visit inv_map
++      (partition : CFG.Node.t WeakTopologicalOrder.Partition.t) =
++    match partition with
++    | Empty ->
++        inv_map
++    | Node {node; next} ->
++        let inv_map =
++          exec_wto_node ~pp_instr cfg proc_data ~is_narrowing:(is_narrowing_of mode) inv_map node
++            ~is_loop_head:false
++          |> fst
++        in
++        exec_wto_partition ~pp_instr cfg proc_data ~mode ~is_first_visit inv_map next
++    | Component {head; rest; next} ->
++        let inv_map =
++          match mode with
++          | Widen when is_first_visit ->
++              do_widen_then_narrow ~pp_instr cfg proc_data inv_map head ~is_first_visit rest
++          | Widen | Narrow ->
++              exec_wto_component ~pp_instr cfg proc_data inv_map head ~is_loop_head:false ~mode
++                ~is_first_visit rest
++          | WidenThenNarrow ->
++              do_widen_then_narrow ~pp_instr cfg proc_data inv_map head ~is_first_visit rest
++        in
++        exec_wto_partition ~pp_instr cfg proc_data ~mode ~is_first_visit inv_map next
++
++
++  and do_widen_then_narrow ~pp_instr cfg proc_data inv_map head ~is_first_visit rest =
++    let inv_map =
++      exec_wto_component ~pp_instr cfg proc_data inv_map head ~is_loop_head:false ~mode:Widen
++        ~is_first_visit rest
++    in
++    exec_wto_component ~pp_instr cfg proc_data inv_map head ~is_loop_head:false ~mode:Narrow
++      ~is_first_visit rest
++
++
++  let exec_cfg_internal ~pp_instr cfg proc_data ~do_narrowing ~initial =
++    let wto = CFG.wto cfg in
++    let exec_cfg ~mode inv_map =
++      match wto with
++      | Empty ->
++          inv_map (* empty cfg *)
++      | Node {node= start_node; next} as wto ->
++          if Config.write_html then debug_wto wto start_node ;
++          let inv_map, _did_not_reach_fix_point =
++            exec_node ~pp_instr proc_data start_node ~is_loop_head:false
++              ~is_narrowing:(is_narrowing_of mode) initial inv_map
++          in
++          exec_wto_partition ~pp_instr cfg proc_data ~mode ~is_first_visit:true inv_map next
++      | Component _ ->
++          L.(die InternalError) "Did not expect the start node to be part of a loop"
++    in
++    if do_narrowing then exec_cfg ~mode:WidenThenNarrow InvariantMap.empty |> exec_cfg ~mode:Narrow
++    else exec_cfg ~mode:Widen InvariantMap.empty
++
++
++  let exec_cfg ?(do_narrowing = false) = exec_cfg_internal ~pp_instr:pp_sil_instr ~do_narrowing
++
++  let exec_pdesc ?(do_narrowing = false) = make_exec_pdesc ~exec_cfg_internal ~do_narrowing
++
++  let compute_post ?(do_narrowing = false) = make_compute_post ~exec_cfg_internal ~do_narrowing
++end
++
+ module MakeWTO (T : TransferFunctions.SIL) = MakeWTONode (SimpleNodeTransferFunctions (T))
+ module MakeDisjunctive
+     (T : TransferFunctions.DisjReady)
+     (DConfig : TransferFunctions.DisjunctiveConfig) =
+   MakeWTONode (MakeDisjunctiveTransferFunctions (T) (DConfig))
++
++module MakeDisjunctiveML
++    (T : TransferFunctions.DisjReadyWithML)
++    (DConfig : TransferFunctions.DisjunctiveConfig) =
++  MakeWTONodeML (MakeDisjunctiveTransferFunctionsML (T) (DConfig))
+diff --git a/infer/src/absint/AbstractInterpreter.mli b/infer/src/absint/AbstractInterpreter.mli
+index c6fceff6e..d4550ab7d 100644
+--- a/infer/src/absint/AbstractInterpreter.mli
++++ b/infer/src/absint/AbstractInterpreter.mli
+@@ -82,3 +82,11 @@ module MakeDisjunctive
+     with type TransferFunctions.analysis_data = T.analysis_data
+      and module TransferFunctions.CFG = T.CFG
+      and type TransferFunctions.Domain.t = T.Domain.t list
++
++module MakeDisjunctiveML
++    (T : TransferFunctions.DisjReadyWithML)
++    (DConfig : TransferFunctions.DisjunctiveConfig) :
++  S
++    with type TransferFunctions.analysis_data = T.analysis_data
++     and module TransferFunctions.CFG = T.CFG
++     and type TransferFunctions.Domain.t = T.Domain.t list
+diff --git a/infer/src/absint/MLVector.ml b/infer/src/absint/MLVector.ml
+new file mode 100644
+index 000000000..4969491eb
+--- /dev/null
++++ b/infer/src/absint/MLVector.ml
+@@ -0,0 +1,31 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++module F = Format
++
++type t = int list
++
++let pp f vs =
++  (*let vs = List.map vs ~f:string_of_int in *) (* to reduce cost *)
++  List.iter vs ~f:(fun x -> F.fprintf f "%d " x)
++
++let concat (vs1: t) (vs2: t) = vs1 @ vs2
++
++let equal (vs1: t) (vs2: t) = List.equal Int.equal vs1 vs2
++let compare vs1 vs2 = List.compare Int.compare vs1 vs2
++
++let vector vs = vs
++let to_list (vs: t): int list = vs
++
++let length (vs: t): int = List.length vs
++
++module Key = struct
++  type nonrec t = t [@@deriving compare]
++end
++
++module Set = Caml.Set.Make(Key)
++module Map = Caml.Map.Make(Key)
+diff --git a/infer/src/absint/MLVector.mli b/infer/src/absint/MLVector.mli
+new file mode 100644
+index 000000000..e6363cab3
+--- /dev/null
++++ b/infer/src/absint/MLVector.mli
+@@ -0,0 +1,21 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++type t = int list
++
++val pp : Format.formatter -> t -> unit
++
++val concat: t -> t -> t
++val equal: t -> t -> bool
++
++val vector : int list -> t
++val to_list : t -> int list
++
++val length: t -> int
++
++module Set : Caml.Set.S with type elt = t
++module Map : Caml.Map.S with type key = t
+diff --git a/infer/src/absint/ProcCfg.ml b/infer/src/absint/ProcCfg.ml
+index 04521663f..059e32eb0 100644
+--- a/infer/src/absint/ProcCfg.ml
++++ b/infer/src/absint/ProcCfg.ml
+@@ -33,6 +33,8 @@ module type Node = sig
+ 
+   val pp_id : F.formatter -> id -> unit
+ 
++  val feature_vector : t -> int list
++
+   module IdMap : PrettyPrintable.PPMap with type key = id
+ 
+   module IdSet : PrettyPrintable.PPSet with type elt = id
+@@ -59,6 +61,8 @@ module DefaultNode : Node with type t = Procdesc.Node.t and type id = Procdesc.N
+ 
+   let pp_id = Procdesc.Node.pp_id
+ 
++  let feature_vector = Procdesc.Node.feature_vector
++
+   module OrderedId = struct
+     type t = id [@@deriving compare]
+ 
+@@ -95,6 +99,8 @@ end = struct
+ 
+   let pp_id fmt (id, index) = F.fprintf fmt "(%a: %d)" Procdesc.Node.pp_id id index
+ 
++  let feature_vector (t, _) = Procdesc.Node.feature_vector t
++
+   module OrderedId = struct
+     type t = id [@@deriving compare]
+ 
+diff --git a/infer/src/absint/ProcCfg.mli b/infer/src/absint/ProcCfg.mli
+index 99bb94e3e..d6d82241c 100644
+--- a/infer/src/absint/ProcCfg.mli
++++ b/infer/src/absint/ProcCfg.mli
+@@ -32,6 +32,8 @@ module type Node = sig
+ 
+   val pp_id : Format.formatter -> id -> unit
+ 
++  val feature_vector : t -> int list
++
+   module IdMap : PrettyPrintable.PPMap with type key = id
+ 
+   module IdSet : PrettyPrintable.PPSet with type elt = id
+diff --git a/infer/src/absint/TransferFunctions.ml b/infer/src/absint/TransferFunctions.ml
+index 954197c7c..a41c251f5 100644
+--- a/infer/src/absint/TransferFunctions.ml
++++ b/infer/src/absint/TransferFunctions.ml
+@@ -25,6 +25,27 @@ module type SIL = sig
+   include S with type instr := Sil.instr
+ end
+ 
++module type SML = sig
++  module CFG : ProcCfg.S
++
++  module Domain : sig
++    include AbstractDomain.S
++    val sjoin : CFG.Node.t -> t -> t -> t
++  end
++
++  type analysis_data
++
++  type instr
++
++  val exec_instr : Domain.t -> analysis_data -> CFG.Node.t -> instr -> Domain.t
++
++  val pp_session_name : CFG.Node.t -> Format.formatter -> unit
++end
++
++module type SILML = sig
++  include SML with type instr := Sil.instr
++end
++
+ module type HIL = sig
+   include S with type instr := HilInstr.t
+ end
+@@ -50,3 +71,22 @@ module type DisjReady = sig
+ 
+   val pp_session_name : CFG.Node.t -> Format.formatter -> unit
+ end
++
++module type DisjReadyWithML = sig
++  module CFG : ProcCfg.S
++
++  module Domain : sig
++    include AbstractDomain.NoJoinForML
++
++    type coverage
++    val empty_covered: coverage
++    val add_covered: coverage -> t -> coverage
++    val new_covered: coverage -> t -> int
++  end
++
++  type analysis_data
++
++  val exec_instr : Domain.t -> analysis_data -> CFG.Node.t -> Sil.instr -> Domain.t list
++
++  val pp_session_name : CFG.Node.t -> Format.formatter -> unit
++end
+diff --git a/infer/src/absint/TransferFunctions.mli b/infer/src/absint/TransferFunctions.mli
+index e6482f508..bd0feb0f6 100644
+--- a/infer/src/absint/TransferFunctions.mli
++++ b/infer/src/absint/TransferFunctions.mli
+@@ -37,6 +37,36 @@ module type SIL = sig
+   include S with type instr := Sil.instr
+ end
+ 
++module type SML = sig
++  module CFG : ProcCfg.S
++
++  (** abstract domain whose state we propagate *)
++  module Domain : sig
++    include AbstractDomain.S
++    val sjoin : CFG.Node.t -> t -> t -> t
++  end
++
++  (** read-only extra state (results of previous analyses, globals, etc.) *)
++  type analysis_data
++
++  (** type of the instructions the transfer functions operate on *)
++  type instr
++
++  val exec_instr : Domain.t -> analysis_data -> CFG.Node.t -> instr -> Domain.t
++  (** [exec_instr astate proc_data node instr] should usually return [astate'] such that
++      [{astate} instr {astate'}] is a valid Hoare triple. In other words, [exec_instr] defines how
++      executing an instruction from a given abstract state changes that state into a new one. This
++      is usually called the {i transfer function} in Abstract Interpretation terms. [node] is the
++      node containing the current instruction. *)
++
++  val pp_session_name : CFG.Node.t -> Format.formatter -> unit
++  (** print session name for HTML debug *)
++end
++
++module type SILML = sig
++  include SML with type instr := Sil.instr
++end
++
+ module type HIL = sig
+   include S with type instr := HilInstr.t
+ end
+@@ -62,3 +92,23 @@ module type DisjReady = sig
+ 
+   val pp_session_name : CFG.Node.t -> Format.formatter -> unit
+ end
++
++module type DisjReadyWithML = sig
++  include DisjReady
++  module CFG : ProcCfg.S
++
++  module Domain : sig
++    include AbstractDomain.NoJoinForML
++
++    type coverage
++    val empty_covered: coverage
++    val add_covered: coverage -> t -> coverage
++    val new_covered: coverage -> t -> int
++  end
++
++  type analysis_data
++
++  val exec_instr : Domain.t -> analysis_data -> CFG.Node.t -> Sil.instr -> Domain.t list
++
++  val pp_session_name : CFG.Node.t -> Format.formatter -> unit
++end
+diff --git a/infer/src/absint/dune b/infer/src/absint/dune
+index f3746909a..4547ddccf 100644
+--- a/infer/src/absint/dune
++++ b/infer/src/absint/dune
+@@ -9,7 +9,7 @@
+  (flags
+   (:standard -open Core -open IR -open IStdlib -open IStd -open ATDGenerated
+     -open IBase))
+- (libraries core IStdlib ATDGenerated IBase IR)
++ (libraries core IStdlib ATDGenerated IBase IR pyml)
+  (preprocess
+   (pps ppx_compare ppx_yojson_conv)))
+ 
+diff --git a/infer/src/backend/CallbackOfChecker.ml b/infer/src/backend/CallbackOfChecker.ml
+index 47d0920f6..750ce7ab2 100644
+--- a/infer/src/backend/CallbackOfChecker.ml
++++ b/infer/src/backend/CallbackOfChecker.ml
+@@ -92,3 +92,8 @@ let intraprocedural_with_field_dependency payload_field checker ({Callbacks.summ
+ let intraprocedural_with_field payload_field checker ({Callbacks.summary} as callbacks) =
+   let result = checker (to_intraprocedural_t callbacks) in
+   {summary with payloads= Field.fset payload_field summary.payloads result}
++
++
++let intraprocedural_with_callees checker ({Callbacks.summary} as callbacks) =
++  let result = checker (to_intraprocedural_t callbacks) in
++  {summary with callee_pnames= result}
+diff --git a/infer/src/backend/CallbackOfChecker.mli b/infer/src/backend/CallbackOfChecker.mli
+index b927f22b5..80247a8c7 100644
+--- a/infer/src/backend/CallbackOfChecker.mli
++++ b/infer/src/backend/CallbackOfChecker.mli
+@@ -58,3 +58,7 @@ val intraprocedural_with_field :
+   -> (IntraproceduralAnalysis.t -> 'payload option)
+   -> Callbacks.proc_callback_t
+ (** runs an intra-procedural analysis that nonetheless produces a payload *)
++
++val intraprocedural_with_callees :
++  (IntraproceduralAnalysis.t -> Procname.Set.t) -> Callbacks.proc_callback_t
++(** runs an intra-procedural analysis that computes callgraph *)
+diff --git a/infer/src/backend/registerCheckers.ml b/infer/src/backend/registerCheckers.ml
+index 4390d0c99..a38b6be7c 100644
+--- a/infer/src/backend/registerCheckers.ml
++++ b/infer/src/backend/registerCheckers.ml
+@@ -56,6 +56,7 @@ let file issue_dir payload_field checker =
+ 
+ let intraprocedural checker = Procedure (CallbackOfChecker.intraprocedural checker)
+ 
++
+ let intraprocedural_with_payload payload_field checker =
+   Procedure (CallbackOfChecker.intraprocedural_with_field payload_field checker)
+ 
+@@ -64,6 +65,9 @@ let intraprocedural_with_field_dependency payload_field checker =
+   Procedure (CallbackOfChecker.intraprocedural_with_field_dependency payload_field checker)
+ 
+ 
++let intraprocedural_with_callees checker = Procedure (CallbackOfChecker.intraprocedural_with_callees checker)
++
++
+ type checker = {checker: Checker.t; callbacks: (callback_fun * Language.t) list}
+ 
+ let all_checkers =
+@@ -151,7 +155,10 @@ let all_checkers =
+            if Config.is_checker_enabled ToplOnPulse then Topl.analyze_with_pulse Pulse.checker
+            else Pulse.checker
+          in
++         DumpTrace.init_cgs ();
++         DumpTrace.load_coverage ();
+          let pulse = interprocedural Payloads.Fields.pulse checker in
++         Dump.setup_dump_file () ;
+          [(pulse, Clang); (pulse, Java)] ) }
+   ; { checker= Impurity
+     ; callbacks=
+@@ -195,8 +202,11 @@ let all_checkers =
+            interprocedural Payloads.Fields.config_checks_between_markers
+              ConfigChecksBetweenMarkers.checker
+          in
+-         [(checker, Clang); (checker, Java)] ) } ]
+-
++         [(checker, Clang); (checker, Java)] ) }
++  ; {checker= CG
++    ; callbacks=
++        (let checker = intraprocedural_with_callees Cg.checker in
++         [(checker, Clang)] ) } ]
+ 
+ let get_active_checkers () =
+   let filter_checker {checker} = Config.is_checker_enabled checker in
+diff --git a/infer/src/base/Checker.ml b/infer/src/base/Checker.ml
+index 9b007a53b..36d91617a 100644
+--- a/infer/src/base/Checker.ml
++++ b/infer/src/base/Checker.ml
+@@ -38,6 +38,7 @@ type t =
+   | ToplOnBiabduction
+   | ToplOnPulse
+   | Uninit
++  | CG
+ [@@deriving equal, enumerate]
+ 
+ type support = NoSupport | ExperimentalSupport | Support
+@@ -402,6 +403,14 @@ let config_unsafe checker =
+       ; cli_flags= Some {deprecated= []; show_in_help= true}
+       ; enabled_by_default= true
+       ; activates= [] }
++  | CG ->
++      { id= "cg"
++      ; kind= UserFacing {title= "CGPulse"; markdown_body= ""}
++      ; support= supports_clang
++      ; short_documentation= "Callgraph analysis."
++      ; cli_flags= Some {deprecated= []; show_in_help= true}
++      ; enabled_by_default= false
++      ; activates= [] }
+ 
+ 
+ let config c =
+diff --git a/infer/src/base/Checker.mli b/infer/src/base/Checker.mli
+index 20b689d7d..c4f7d305e 100644
+--- a/infer/src/base/Checker.mli
++++ b/infer/src/base/Checker.mli
+@@ -37,6 +37,7 @@ type t =
+   | ToplOnBiabduction
+   | ToplOnPulse
+   | Uninit
++  | CG
+ [@@deriving equal, enumerate]
+ 
+ (** per-language support for each checker *)
+diff --git a/infer/src/base/Config.ml b/infer/src/base/Config.ml
+index f68581afc..8dfcf3c5d 100644
+--- a/infer/src/base/Config.ml
++++ b/infer/src/base/Config.ml
+@@ -1919,6 +1919,70 @@ and pulse_widen_threshold =
+   CLOpt.mk_int ~long:"pulse-widen-threshold" ~default:3
+     "Under-approximate after $(i,int) loop iterations"
+ 
++and pulse_nonrepeat_mode =
++  CLOpt.mk_bool ~long:"pulse-nonrepeat-mode" ~default:false
++    "Pulse nonrepeat mode for training."
++
++and pulse_train_mode =
++  CLOpt.mk_bool ~long:"pulse-train-mode" ~default:false
++    "Pulse train mode for ML."
++
++and pulse_train_type =
++  CLOpt.mk_int ~long:"pulse-train-type" ~default:0
++    "Pulse train type for ML: (0) All, (1) Memory Leak."
++
++and pulse_random_mode =
++  CLOpt.mk_bool ~long:"pulse-random-mode" ~default:false
++    "Pulse random mode."
++
++and pulse_join_select =
++  CLOpt.mk_string ~long:"pulse-join-select" ~default:""
++    "Pulse join operator with recorded traces"
++
++and pulse_join_train =
++  CLOpt.mk_string ~long:"pulse-join-train" ~default:""
++    "Pulse join operator for explores"
++
++and pulse_cg_load =
++  CLOpt.mk_string ~long:"pulse-cg-load" ~default:""
++    "Analysis within the given call-graph"
++
++and pulse_coverage =
++  CLOpt.mk_bool ~long:"pulse-cover-mode" ~default:false
++    "Computes a node coverage in Pulse."
++
++and pulse_coverage_load =
++  CLOpt.mk_string ~long:"pulse-cover-load" ~default:""
++    "Load the coverage history"
++
++and pulse_join_cover =
++  CLOpt.mk_bool ~long:"pulse-join-cover" ~default:false
++    "Pulse join operator with maximum coverage."
++
++and pulse_limit_fn =
++  CLOpt.mk_int ~long:"pulse-limit-fn" ~default:0
++    "Analysis limit: # of analyzed function."
++
++and pulse_repeat_mode =
++  CLOpt.mk_bool ~long:"pulse-repeat-mode" ~default:false
++    "Repeatedly analyze functions until it does not find new alarms."
++
++and pulse_limit_depth =
++  CLOpt.mk_int ~long:"pulse-limit-depth" ~default:0
++    "Analysis limit: # of analyzed call-stack."
++
++and pulse_feature_filter_out =
++  CLOpt.mk_string ~long:"pulse-feature-out" ~default:""
++    "Disregards the given indexed feature vectors from ML"
++
++and pulse_feature_filter_only =
++  CLOpt.mk_string ~long:"pulse-feature-only" ~default:""
++    "Only use the given indexed feature vectors from ML"
++
++and cg_no_recursion =
++  CLOpt.mk_bool ~long:"cg-no-recursion" ~default:false
++    "Remove the back-edges from the call-graph"
++
+ 
+ and pure_by_default =
+   CLOpt.mk_bool ~long:"pure-by-default" ~default:false
+@@ -2933,7 +2997,9 @@ and javac_classes_out = !javac_classes_out
+ 
+ and job_id = !job_id
+ 
+-and jobs = Option.fold !max_jobs ~init:!jobs ~f:min
++and jobs =
++  if !pulse_train_mode then 1
++  else Option.fold !max_jobs ~init:!jobs ~f:min
+ 
+ and join_cond = !join_cond
+ 
+@@ -3102,6 +3168,164 @@ and pulse_report_latent_issues = !pulse_report_latent_issues
+ 
+ and pulse_widen_threshold = !pulse_widen_threshold
+ 
++and pulse_nonrepeat_mode = !pulse_nonrepeat_mode
++
++and pulse_train_mode = !pulse_train_mode
++
++and pulse_train_type = !pulse_train_type
++
++and pulse_random_mode = !pulse_random_mode
++
++and pulse_feature_filter_out =
++  Str.split (Str.regexp "[ ,]+") !pulse_feature_filter_out
++  |> List.map ~f:int_of_string
++  |> List.sort ~compare:Int.compare
++
++and pulse_feature_filter_only =
++  if String.equal "" !pulse_feature_filter_only then None
++  else
++    let x =
++      Str.split (Str.regexp "[ ,]+") !pulse_feature_filter_only
++      |> List.map ~f:int_of_string
++      |> List.sort ~compare:Int.compare
++    in
++    Some(x)
++
++and pulse_join_select =
++  let wrap fn int_list =
++    let scores_listi = List.map ~f:(Py.List.of_list_map Py.Int.of_int) int_list in
++    let scores_list = fn [| Py.List.of_list scores_listi |] in
++    Py.List.to_list_map Py.Float.to_float scores_list
++  in
++  let name = !pulse_join_select in
++  if String.equal name "" then None
++  else if PolyVariantEqual.( = ) (Sys.file_exists name) `Yes then
++    begin
++      print_endline ("Loading the ML model: "^name);
++      (Py.initialize ~debug_build:false)();
++      ignore (Py.Run.eval ~start:Py.File ("
++import pickle
++import numpy
++import xgboost as xgb
++
++clf = pickle.load(open('"^name^"', 'rb'))
++
++def decision_new(x):
++    return clf.predict(xgb.DMatrix(data = numpy.array(x)))
++
++if hasattr(clf,'decision_function'):
++    print('model: GradiantBoosting')
++    decision = clf.decision_function
++else:
++    print('model: XGB')
++    decision = decision_new
++
++def new_dec(x):
++    y = decision(x)
++    for idx, val in enumerate(x):
++        if val in clf.recall:
++            y[idx] = 20
++    return y
++
++if hasattr(clf,'recall'):
++    score = new_dec
++    old_score = decision
++else:
++    score = decision
++    old_score = decision
++"));
++      let fn_score = Py.Callable.to_function (Py.Run.eval "score") in
++      let fn_score_old = Py.Callable.to_function (Py.Run.eval "old_score") in
++      Some(wrap fn_score, wrap fn_score_old)
++    end
++  else
++    L.(die UserError) "Wrong argument for --pulse-join-select: cannot find the ML model: '%s'" name
++
++and pulse_join_train =
++  let wrap fn int_list =
++    let scores_listi = List.map ~f:(Py.List.of_list_map Py.Int.of_int) int_list in
++    let scores_list = fn [| Py.List.of_list scores_listi |] in
++    Py.List.to_list_map Py.Float.to_float scores_list
++  in
++  let name = !pulse_join_train in
++  if String.equal name "" then None
++  else if PolyVariantEqual.( = ) (Sys.file_exists name) `Yes then
++    begin
++      print_endline ("Loading the explored history: "^name);
++      (Py.initialize ~debug_build:false)();
++      ignore (Py.Run.eval ~start:Py.File ("
++import pickle
++import numpy
++import xgboost as xgb
++
++clf = pickle.load(open('"^name^"', 'rb'))
++
++def decision_new(x):
++    return clf.predict(xgb.DMatrix(data = numpy.array(x)))
++
++if hasattr(clf,'decision_function'):
++    print('model: GradiantBoosting')
++    decision = clf.decision_function
++else:
++    print('model: XGB')
++    decision = decision_new
++
++def new_dec(x):
++    y = decision(x)
++    for idx, val in enumerate(x):
++        if val in clf.recall:
++            y[idx] = 20
++    return y
++
++if hasattr(clf,'recall'):
++    score = new_dec
++    old_score = decision
++else:
++    score = decision
++    old_score = decision
++"));
++      let fn = Py.Callable.to_function (Py.Run.eval "score") in
++      Some(wrap fn)
++    end
++  else
++    let fn lst = List.map ~f:(fun _ -> Random.float 10.0) lst in
++    Some(fn)
++
++and pulse_cg_load =
++  let name = !pulse_cg_load in
++  if String.equal name "" then None
++  else if PolyVariantEqual.( = ) (Sys.file_exists name) `Yes then
++    begin
++      Some(Stdlib.open_in name)
++    end
++  else
++    None
++
++and pulse_coverage_load =
++  let name = !pulse_coverage_load in
++  if String.equal name "" then None
++  else if PolyVariantEqual.( = ) (Sys.file_exists name) `Yes then
++    begin
++      Some(Stdlib.open_in name)
++    end
++  else
++    None
++
++and pulse_join_cover =
++  if not !pulse_coverage && !pulse_join_cover then
++      pulse_coverage := true;
++  !pulse_join_cover
++
++and pulse_limit_fn = !pulse_limit_fn
++
++and pulse_repeat_mode = !pulse_repeat_mode
++
++and pulse_limit_depth = !pulse_limit_depth
++
++and pulse_coverage = !pulse_coverage
++
++and cg_no_recursion = !cg_no_recursion
++
+ and pure_by_default = !pure_by_default
+ 
+ and quandary_endpoints = !quandary_endpoints
+diff --git a/infer/src/base/Config.mli b/infer/src/base/Config.mli
+index 581acd88e..09260a9d5 100644
+--- a/infer/src/base/Config.mli
++++ b/infer/src/base/Config.mli
+@@ -479,6 +479,38 @@ val pulse_report_latent_issues : bool
+ 
+ val pulse_widen_threshold : int
+ 
++val pulse_train_mode : bool
++
++val pulse_nonrepeat_mode : bool
++
++val pulse_train_type : int
++
++val pulse_feature_filter_out : int list
++
++val pulse_feature_filter_only : int list option
++
++val pulse_random_mode : bool
++
++val pulse_join_select : ((int list list -> float list) * (int list list -> float list)) option
++
++val pulse_join_train : (int list list -> float list) option
++
++val pulse_cg_load : Stdlib.in_channel option
++
++val pulse_coverage : bool
++
++val pulse_coverage_load : Stdlib.in_channel option
++
++val pulse_join_cover : bool
++
++val pulse_limit_fn : int
++
++val pulse_repeat_mode : bool
++
++val pulse_limit_depth : int
++
++val cg_no_recursion : bool
++
+ val pure_by_default : bool
+ 
+ val quandary_endpoints : Yojson.Basic.t
+diff --git a/infer/src/base/Dump.ml b/infer/src/base/Dump.ml
+new file mode 100644
+index 000000000..f507b8492
+--- /dev/null
++++ b/infer/src/base/Dump.ml
+@@ -0,0 +1,77 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++module F = Format
++module Hashtbl = Caml.Hashtbl
++
++let trace_file = ref None
++let replay_mode = ref false
++
++let is_replaying () = !replay_mode
++
++let finalize list =
++  match !trace_file with
++  | Some(chan) ->
++      Marshal.to_channel chan list [];
++      Out_channel.close chan
++  | _ -> ()
++
++let finalize_for_training f =
++  let training_txt = ResultsDirEntryName.get_path ~results_dir:"./" TrainingDataSet in
++  let chan = Stdlib.open_out_gen [Open_append; Open_creat] 0o666 training_txt in
++  let fmt = F.formatter_of_out_channel chan in
++  let k_force_newline f = F.pp_force_newline f () in
++  let println f = F.kfprintf k_force_newline fmt f in
++  f println;
++  Out_channel.close chan
++
++let finalize_for_trace_log f =
++  let training_txt = ResultsDirEntryName.get_path ~results_dir:"./" HistoryLog in
++  let chan = Stdlib.open_out_gen [Open_append; Open_creat] 0o666 training_txt in
++  let fmt = F.formatter_of_out_channel chan in
++  let k_force_newline f = F.pp_force_newline f () in
++  let println f = F.kfprintf k_force_newline fmt f in
++  f println;
++  Out_channel.close chan
++
++let acc_txt = ResultsDirEntryName.get_path ~results_dir:"./" TrainingAccDataSet
++
++let finalize_for_accumulation data =
++  let chan = Stdlib.open_out_gen [Open_append; Open_creat] 0o666 acc_txt in
++  Marshal.to_channel chan data [];
++  Out_channel.close chan
++
++let finalize_for_history f =
++  let txt = ResultsDirEntryName.get_path ~results_dir:"./" HistoryData in
++  let chan = Stdlib.open_out_gen [Open_append; Open_creat; Open_text] 0o666 txt in
++  let fmt = F.formatter_of_out_channel chan in
++  let k_force_newline f = F.pp_force_newline f () in
++  let println f = F.kfprintf k_force_newline fmt f in
++  f println;
++  Out_channel.close chan
++
++let read_acc ~f =
++  let chan = Stdlib.open_in_bin acc_txt in
++  let v = f chan in
++  In_channel.close chan;
++  Some(v)
++
++let logfile_path =
++  ResultsDirEntryName.get_path ~results_dir:"./" TraceForML
++
++let read ~f =
++  if !replay_mode then
++    let chan = Stdlib.open_in_bin logfile_path in
++    let v = f chan in
++    In_channel.close chan;
++    Some(v)
++  else
++    None
++
++let setup_dump_file () =
++  if Config.pulse_train_mode then
++    trace_file := Some (Stdlib.open_out_gen [Open_append; Open_creat] 0o666 logfile_path)
+diff --git a/infer/src/base/Dump.mli b/infer/src/base/Dump.mli
+new file mode 100644
+index 000000000..b8311387b
+--- /dev/null
++++ b/infer/src/base/Dump.mli
+@@ -0,0 +1,24 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++module F = Format
++module Hashtbl = Caml.Hashtbl
++
++
++val is_replaying: unit -> bool
++val finalize : 'a list -> unit
++val finalize_for_training : ((('a, F.formatter, unit) format -> 'a) -> unit) -> unit
++val finalize_for_trace_log : ((('a, F.formatter, unit) format -> 'a) -> unit) -> unit
++val finalize_for_history : ((('a, F.formatter, unit) format -> 'a) -> unit) -> unit
++val finalize_for_accumulation : 'a -> unit
++
++
++val setup_dump_file : unit -> unit
++(** Set up logging to go to the log file. Call this once the results directory has been set up. *)
++
++val read : f:(In_channel.t -> 'a) -> 'a option
++val read_acc : f:(In_channel.t -> 'a) -> 'a option
+diff --git a/infer/src/base/ResultsDirEntryName.ml b/infer/src/base/ResultsDirEntryName.ml
+index 9196a765b..0e3160438 100644
+--- a/infer/src/base/ResultsDirEntryName.ml
++++ b/infer/src/base/ResultsDirEntryName.ml
+@@ -36,6 +36,12 @@ type id =
+   | Temporary
+   | TestDeterminatorReport
+   | TestDeterminatorTempResults
++  | TraceForML
++  | TrainingDataSet
++  | TrainingAccDataSet
++  | CGRecords
++  | HistoryData
++  | HistoryLog
+ [@@deriving enumerate]
+ 
+ type cleanup_action = Delete | Keep [@@deriving equal]
+@@ -182,6 +188,36 @@ let of_id = function
+       ; kind= Directory
+       ; before_incremental_analysis= Delete
+       ; before_caching_capture= Delete }
++  | TraceForML ->
++      { rel_path= "trace"
++      ; kind= File
++      ; before_incremental_analysis= Keep
++      ; before_caching_capture= Keep }
++  | TrainingDataSet ->
++      { rel_path= "train.txt"
++      ; kind= File
++      ; before_incremental_analysis= Keep
++      ; before_caching_capture= Keep }
++  | TrainingAccDataSet ->
++      { rel_path= "accum.txt"
++      ; kind= File
++      ; before_incremental_analysis= Keep
++      ; before_caching_capture= Keep }
++  | CGRecords ->
++      { rel_path= "cg.dot"
++      ; kind= File
++      ; before_incremental_analysis= Keep
++      ; before_caching_capture= Delete }
++  | HistoryData ->
++      { rel_path= "history.txt"
++      ; kind= File
++      ; before_incremental_analysis= Keep
++      ; before_caching_capture= Keep }
++  | HistoryLog ->
++      { rel_path= "history.log"
++      ; kind= File
++      ; before_incremental_analysis= Keep
++      ; before_caching_capture= Keep }
+ 
+ 
+ let path_of_entry ~results_dir {rel_path; _} = results_dir ^/ rel_path
+diff --git a/infer/src/base/ResultsDirEntryName.mli b/infer/src/base/ResultsDirEntryName.mli
+index 8305ba28f..674602c6d 100644
+--- a/infer/src/base/ResultsDirEntryName.mli
++++ b/infer/src/base/ResultsDirEntryName.mli
+@@ -37,6 +37,12 @@ type id =
+   | Temporary  (** directory containing temp files *)
+   | TestDeterminatorReport  (** the report produced by the test determinator capture mode *)
+   | TestDeterminatorTempResults  (** a directory *)
++  | TraceForML (** a trace dump file for training *)
++  | TrainingDataSet (** a data-set for training *)
++  | TrainingAccDataSet (** a data-set for training deadend *)
++  | CGRecords (** computed call-graph information *)
++  | HistoryData
++  | HistoryLog
+ 
+ val get_path : results_dir:string -> id -> string
+ (** the absolute path for the given entry *)
+diff --git a/infer/src/base/dune b/infer/src/base/dune
+index 3ecb7da9d..e4339e6ea 100644
+--- a/infer/src/base/dune
++++ b/infer/src/base/dune
+@@ -10,7 +10,7 @@
+   (:standard -open Core -open IStdlib -open IStd -open ATDGenerated -open
+     OpenSource))
+  (libraries cmdliner core mtime.clock.os parmap re sqlite3 zip ATDGenerated
+-   IStdlib OpenSource)
++   IStdlib OpenSource pyml)
+  (preprocess
+   (pps ppx_blob ppx_compare ppx_enumerate))
+  (preprocessor_deps
+diff --git a/infer/src/checkers/cg.ml b/infer/src/checkers/cg.ml
+new file mode 100644
+index 000000000..14d9b6f5c
+--- /dev/null
++++ b/infer/src/checkers/cg.ml
+@@ -0,0 +1,28 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++open! IStd
++
++let proc_name_of_call call_exp =
++  match (call_exp : Exp.t) with
++  | Const (Cfun proc_name) | Closure {name= proc_name} ->
++      Some proc_name
++  | _ ->
++      None
++
++let checker {IntraproceduralAnalysis.proc_desc} =
++  Procdesc.fold_instrs proc_desc ~init:Procname.Set.empty
++    ~f:(fun acc _n i ->
++        match i with
++        | Call (_, call_exp, _, _loc, _) ->
++            begin
++              match proc_name_of_call call_exp with
++              | Some callee_pname ->
++                  Procname.Set.add callee_pname acc
++              | None -> acc
++            end
++        | _ -> acc)
+diff --git a/infer/src/checkers/cg.mli b/infer/src/checkers/cg.mli
+new file mode 100644
+index 000000000..97d8dc459
+--- /dev/null
++++ b/infer/src/checkers/cg.mli
+@@ -0,0 +1,11 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++open! IStd
++
++val checker : IntraproceduralAnalysis.t -> Procname.Set.t
++
+diff --git a/infer/src/dune.in b/infer/src/dune.in
+index c4b9477f6..d9a18367f 100644
+--- a/infer/src/dune.in
++++ b/infer/src/dune.in
+@@ -66,7 +66,7 @@ let infer_exe_stanza =
+  (modes byte_complete exe)
+  (modules Infer)
+  (flags (:standard -open Core -open IStdlib -open IStd -open IBase -open IR -open Backend -open Integration -open Biabduction -open TestDeterminators -open ClangFrontend -open ASTLanguage %s -open JavaFrontend %s))
+- (libraries %s core IStdlib IBase IR Backend Integration Biabduction TestDeterminators ClangFrontend ASTLanguage)
++ (libraries %s core IStdlib IBase IR Backend Integration Biabduction TestDeterminators ClangFrontend ASTLanguage pyml)
+  (preprocess (pps ppx_compare))
+  (promote (until-clean) (into ../bin))
+ )|}
+diff --git a/infer/src/integration/DotReports.ml b/infer/src/integration/DotReports.ml
+new file mode 100644
+index 000000000..7acbb2984
+--- /dev/null
++++ b/infer/src/integration/DotReports.ml
+@@ -0,0 +1,115 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++open! IStd
++module L = Logging
++module F = Format
++
++module type Printer = sig
++  type elt
++
++  val pp_open : F.formatter -> unit -> unit
++
++  val pp_close : F.formatter -> unit -> unit
++
++  val pp : F.formatter -> elt -> unit
++end
++
++module MakeDotGraphPrinter (P : sig
++  type elt
++
++  val to_string : elt -> string option
++end) : Printer with type elt = P.elt = struct
++  include P
++
++  let pp_open _fmt () =
++    ()
++
++  let pp_close _fmt () =
++    ()
++
++  let pp fmt elt =
++    match to_string elt with
++    | Some s ->
++        F.fprintf fmt "%s@\n@?" s
++    | None ->
++        ()
++end
++
++type edge = string * string
++
++module DotGraphPrinter = MakeDotGraphPrinter (struct
++    type elt = edge
++
++    let to_string (elt : edge) = Some("\""^(fst elt)^"\",\""^(snd elt)^"\"")
++  end)
++
++module GraphDot = struct
++  include DotGraphPrinter
++end
++
++module StrKey = struct
++  type t = string [@@deriving compare]
++end
++
++module StrSet = Caml.Set.Make(StrKey)
++module StrMap = Caml.Map.Make(StrKey)
++
++let rec remove_backedges node stack visited cg ncg =
++  if StrSet.mem node visited then (ncg,visited)
++  else
++    let stack = StrSet.add node stack in
++    let visited = StrSet.add node visited in
++    let nexts = try StrMap.find node cg with _ -> StrSet.empty in
++    let (nexts, ncg,visited) =
++      StrSet.fold (fun next (acc,ncg,visited) ->
++          if not (StrSet.mem next stack) then
++            begin
++              let (ncg, visited) = remove_backedges next stack visited cg ncg in
++              let acc = StrSet.add next acc in
++              (acc,ncg,visited)
++            end
++          else
++            (acc,ncg,visited)) nexts (StrSet.empty, ncg,visited)
++    in
++    let ncg = StrMap.add node nexts ncg in
++    (ncg, visited)
++
++let remove_backedges cg =
++  let stack = StrSet.empty in
++  let visited = StrSet.empty in
++  let (ncg, _) = StrMap.fold (fun caller _ (ncg,visited) -> remove_backedges caller stack visited cg ncg) cg (StrMap.empty,visited) in
++  ncg
++
++let process_all_call_edges outf =
++  let cg = ref StrMap.empty in
++  Summary.OnDisk.iter_specs ~f:(fun { proc_desc; callee_pnames } ->
++      let caller = Procname.to_unique_id (Procdesc.get_proc_name proc_desc) in
++      let callees = Procname.Set.fold (fun callee acc ->
++          StrSet.add (Procname.to_unique_id callee) acc) callee_pnames StrSet.empty in
++      cg := StrMap.add caller callees !cg);
++  begin
++    if Config.cg_no_recursion then
++      let ncg = remove_backedges !cg in
++      cg := ncg;
++  end;
++  StrMap.iter (fun caller callees ->
++      StrSet.iter (fun callee ->
++          GraphDot.pp outf.Utils.fmt (caller,callee)) callees) !cg
++
++let write_reports graph_dot =
++  let dot_outf =
++    match Utils.create_outfile graph_dot with
++    | None ->
++        L.die InternalError "Could not create '%s'." graph_dot
++    | Some outf -> outf
++  in
++  GraphDot.pp_open dot_outf.fmt () ;
++  process_all_call_edges dot_outf ;
++  GraphDot.pp_close dot_outf.fmt () ;
++  Utils.close_outf dot_outf ;
++  ()
+diff --git a/infer/src/integration/DotReports.mli b/infer/src/integration/DotReports.mli
+new file mode 100644
+index 000000000..4ed6a0063
+--- /dev/null
++++ b/infer/src/integration/DotReports.mli
+@@ -0,0 +1,11 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++open! IStd
++
++val write_reports : string -> unit
++
+diff --git a/infer/src/integration/Driver.ml b/infer/src/integration/Driver.ml
+index 3f6a8c7dc..372b747bd 100644
+--- a/infer/src/integration/Driver.ml
++++ b/infer/src/integration/Driver.ml
+@@ -181,7 +181,9 @@ let execute_analyze ~changed_files =
+ 
+ 
+ let report ?(suppress_console = false) () =
++  let cg_dot = ResultsDir.get_path CGRecords in
+   let issues_json = ResultsDir.get_path ReportJson in
++  DotReports.write_reports cg_dot ;
+   JsonReports.write_reports ~issues_json ~costs_json:(ResultsDir.get_path ReportCostsJson) ;
+   (* Post-process the report according to the user config. By default, calls report.py to create a
+      human-readable report.
+diff --git a/infer/src/istd/IntMap.ml b/infer/src/istd/IntMap.ml
+new file mode 100644
+index 000000000..22d55618f
+--- /dev/null
++++ b/infer/src/istd/IntMap.ml
+@@ -0,0 +1,9 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++open! Core
++include Caml.Map.Make (Int)
+diff --git a/infer/src/istd/IntMap.mli b/infer/src/istd/IntMap.mli
+new file mode 100644
+index 000000000..c27219afd
+--- /dev/null
++++ b/infer/src/istd/IntMap.mli
+@@ -0,0 +1,8 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++include Caml.Map.S with type key = int
+diff --git a/infer/src/istd/UnionFind.ml b/infer/src/istd/UnionFind.ml
+index 510cc9e47..a0f3d94cc 100644
+--- a/infer/src/istd/UnionFind.ml
++++ b/infer/src/istd/UnionFind.ml
+@@ -24,7 +24,7 @@ module Make (X : Element) (XSet : Caml.Set.S with type elt = X.t) = struct
+     (** to get a little bit of type safety *)
+     type repr = private X.t
+ 
+-    type t
++    type t [@@deriving compare]
+ 
+     val empty : t
+ 
+@@ -41,7 +41,7 @@ module Make (X : Element) (XSet : Caml.Set.S with type elt = X.t) = struct
+   end = struct
+     type repr = X.t
+ 
+-    type t = X.t Map.t
++    type t = X.t Map.t [@@deriving compare]
+ 
+     let empty = Map.empty
+ 
+@@ -80,7 +80,7 @@ module Make (X : Element) (XSet : Caml.Set.S with type elt = X.t) = struct
+       UF.Map.remove x1 classes |> UF.Map.add x2 new_class
+   end
+ 
+-  type t = {reprs: UF.t; classes: XSet.t UF.Map.t}
++  type t = {reprs: UF.t; classes: XSet.t UF.Map.t} [@@deriving compare]
+ 
+   let empty = {reprs= UF.empty; classes= UF.Map.empty}
+ 
+diff --git a/infer/src/istd/UnionFind.mli b/infer/src/istd/UnionFind.mli
+index c09875c45..a588370f8 100644
+--- a/infer/src/istd/UnionFind.mli
++++ b/infer/src/istd/UnionFind.mli
+@@ -18,7 +18,7 @@ module type Element = sig
+ end
+ 
+ module Make (X : Element) (XSet : Caml.Set.S with type elt = X.t) : sig
+-  type t
++  type t [@@deriving compare]
+ 
+   val pp :
+     pp_empty:(F.formatter -> unit) -> (F.formatter -> X.t -> unit) -> F.formatter -> t -> unit
+diff --git a/infer/src/pulse/DumpTrace.ml b/infer/src/pulse/DumpTrace.ml
+new file mode 100644
+index 000000000..a63282a29
+--- /dev/null
++++ b/infer/src/pulse/DumpTrace.ml
+@@ -0,0 +1,342 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++open PulseBasicInterface
++open PulseDomainInterface
++module Hashtbl = Caml.Hashtbl
++module L = Logging
++
++type t = AbductiveDomain.t
++
++(* node -> a set of prev nodes *)
++let edges: (t, (t, unit) Hashtbl.t) Hashtbl.t = Hashtbl.create 20000
++(* reachable states: abstract state -> unit *)
++let visited_all = Hashtbl.create 1000
++(* abstract state -> a set of node features *)
++let features: (t, MLVector.Set.t) Hashtbl.t = Hashtbl.create 50000
++
++module StrKey = struct
++  type t = string [@@deriving compare]
++end
++
++module StrSet = Caml.Set.Make(StrKey)
++module StrMap = Caml.Map.Make(StrKey)
++
++
++let diagnostics = Hashtbl.create 10000
++let diagnostics_trace = Hashtbl.create 10000
++
++let count_of_diags () = Hashtbl.length diagnostics
++
++let coverage_storage = Hashtbl.create 100
++let add_coverage proc covered =
++  Hashtbl.add coverage_storage proc covered
++let store_coverage () = ()
++
++let cov_initialized = ref false
++
++
++(* --pulse-cg-record: computed call-graph except uninterpreted function callees *)
++let cg : StrSet.t StrMap.t ref = ref StrMap.empty
++
++(** add program point feature to an abstract state. *)
++let add_feature vs a =
++  match vs with
++  | Some (vs) ->
++      let ntbl = try Hashtbl.find features a with _ -> MLVector.Set.empty in
++      let ntbl = MLVector.Set.add vs ntbl in
++      Hashtbl.add features a ntbl
++  | None -> ()
++
++(**
++   - i: string option (for debugging)
++   - vs: feature vectors for program point
++   - a: from
++   - b: to
++*)
++let add_transition =
++  if Config.pulse_train_mode then
++    begin
++      fun i vs (a: t) (b: t) ->
++        if Config.debug_mode then
++          begin
++            Option.iter i ~f:(L.debug Analysis Quiet "instr - %s@\n");
++            L.debug Analysis Quiet "transition from@\n%a@\n" AbductiveDomain.pp a;
++            L.debug Analysis Quiet "transition to@\n%a@\n" AbductiveDomain.pp b;
++          end;
++        add_feature vs a;
++        add_feature vs b;
++        if not (phys_equal a b) then
++          let prevs: (t, unit) Hashtbl.t =
++            if Hashtbl.mem edges b then Hashtbl.find edges b
++            else Hashtbl.create 1
++          in
++          Hashtbl.add prevs a ();
++          Hashtbl.add edges b prevs
++    end
++  else
++    fun _ _ _ _ -> ()
++
++let get_astate: ExecutionDomain.t -> AbductiveDomain.t = function
++  | ContinueProgram astate | ExitProgram astate -> astate
++  | AbortProgram astate -> (astate :> AbductiveDomain.t)
++  | LatentAbortProgram {astate} ->
++      (astate :> AbductiveDomain.t)
++
++let transition =
++  if Config.pulse_train_mode then
++    fun (i: string option) (vs: MLVector.t option) (a: ExecutionDomain.t) (b: ExecutionDomain.t) ->
++      let aa = get_astate a in
++      let bb = get_astate b in
++      add_transition i vs aa bb
++  else
++    fun _ _ _ _ -> ()
++
++let reachable a visited =
++  let rec iter (a: t) =
++    if Config.debug_mode then
++      L.debug Analysis Quiet "searching@\n%a@\n" AbductiveDomain.pp a;
++    if not (Hashtbl.mem visited a) then
++      begin
++        Hashtbl.add visited a ();
++        match Hashtbl.find_opt edges a with
++        | Some s -> Hashtbl.iter (fun a _ -> iter a) s
++        | None ->
++            if Config.debug_mode then
++              L.debug Analysis Quiet "found none edges@\n"
++      end
++  in
++  if Config.debug_mode then
++    L.debug Analysis Quiet "search start@\n%a@\n" AbductiveDomain.pp a;
++  iter a;
++  if Config.debug_mode then
++    L.debug Analysis Quiet "reachable set: %s@\n" (string_of_int (Hashtbl.length visited))
++
++let sample_unreachables visited_all unreachables =
++  let size_v = Hashtbl.length visited_all in
++  let size_u = Seq.fold_left (fun n _ -> n + 1) 0 unreachables in
++  let _ = assert (size_u / size_v > 0) in
++  let pressure = size_u / size_v in
++    Seq.fold_left (fun lst u ->
++      if Random.int pressure <= 1 then u::lst else lst
++    ) [] unreachables
++
++let traverse cg f =
++  let roots =
++    StrMap.fold (fun k _ acc ->
++        match StrMap.exists (fun _ ss -> StrSet.mem k ss) cg with
++        | true ->
++           acc
++        | false ->
++           StrSet.add k acc) cg StrSet.empty
++  in
++  let rec iter n =
++    let _ = print_endline ("iter: "^n) in
++    let ss = try StrMap.find n cg with _ -> StrSet.empty in
++    StrSet.iter (fun s ->
++        iter s;
++        f n s) ss
++  in
++  StrSet.iter iter roots
++
++let load_coverage () =
++  if not !cov_initialized then
++    begin
++      cov_initialized := true;
++      match Config.pulse_coverage_load with
++      | Some chan ->
++         let rec read n f acc =
++           if Int.equal n 0 then acc
++           else
++             begin
++               let line = Stdlib.input_line chan in
++               let acc = f line acc in
++               read (n - 1) f acc
++             end
++         in
++         begin
++            try
++              while true do
++                let line = Stdlib.input_line chan in
++                if not (String.equal "" line) then
++                  let lastBranch = PulseDeadTrace.parse_elem line in
++                  let size = int_of_string (Stdlib.input_line chan) in
++                  let set = read size
++                              (fun line ->
++                                PulsePathHistory.Set.add (PulseDeadTrace.parse_edge line)) PulsePathHistory.Set.empty
++                  in
++                  PulseDeadTrace.add lastBranch set;
++              done
++            with _ ->
++              L.debug Analysis Quiet "History loaded: %d@\n" (PulseDeadTrace.size ());
++              Stdlib.close_in chan;
++          end
++      | None -> ()
++    end
++
++
++let close () =
++  begin
++    if Config.pulse_nonrepeat_mode then
++    let _ = traverse !cg PulseDeadTrace.cb_generalize in
++    let _ = Dump.finalize_for_history (fun println ->
++                PulseDeadTrace.iter (fun elem ->
++                    println "%a" PulseDeadTrace.serialize elem))
++    in
++    ()
++  end;
++  begin
++    if Config.pulse_train_mode then
++      let total_cnt = count_of_diags () in
++      let _ = print_endline ("* total diags: "^(string_of_int total_cnt)) in
++      let _ = Dump.finalize_for_trace_log (fun println ->
++                  Hashtbl.iter (fun paths _ ->
++                      println "%a" AbductiveDomain.pp_trace paths) diagnostics_trace) in
++      let all = Hashtbl.create 10000 in
++      Hashtbl.iter (fun (k: t) (v: (t, unit) Hashtbl.t) ->
++          Hashtbl.add all k ();
++          Hashtbl.iter (fun k _ -> Hashtbl.add all k ()) v)
++        edges;
++      let is_unreachable s = not (Hashtbl.mem visited_all s) in
++      let unreachables: t Seq.t = Hashtbl.to_seq_keys all |> Seq.filter is_unreachable in
++      let set_ok =
++        Hashtbl.fold (fun m _ set ->
++            match Hashtbl.find_opt features m with
++            | Some s ->
++               let vector_state = MLVector.vector (AbductiveDomain.feature_vector m) in
++               MLVector.Set.fold (fun k set ->
++                   let vector = MLVector.concat k vector_state in
++                   MLVector.Set.add vector set) s set
++            | None -> set) visited_all MLVector.Set.empty
++      in
++      let unreachables_list = sample_unreachables visited_all unreachables  in
++      let set_notok =
++        List.fold_left ~f:(fun set m ->
++            match Hashtbl.find_opt features m with
++            | Some s ->
++               let vector_state = MLVector.vector (AbductiveDomain.feature_vector m) in
++               MLVector.Set.fold (fun k set ->
++                   let vector = MLVector.concat k vector_state in
++                   MLVector.Set.add vector set
++                 ) s set
++            | None -> set) ~init:MLVector.Set.empty unreachables_list in
++        let _ = Dump.finalize_for_training (fun println ->
++          MLVector.Set.iter (fun vector -> println "%a 1" MLVector.pp vector) set_ok;
++          MLVector.Set.iter (fun vector -> println "%a 0" MLVector.pp vector) set_notok) in
++         ()
++  end;
++  begin
++    if Config.pulse_coverage then
++      store_coverage ()
++  end
++
++
++let () = Epilogues.register ~f:close ~description:"flushing dumps and closing dump file"
++
++
++let interested_in diag =
++  match Config.pulse_train_type with
++  | 0 -> true
++  | 1 -> IssueType.equal (Diagnostic.get_issue_type diag) IssueType.pulse_memory_leak
++  | 2 -> IssueType.equal (Diagnostic.get_issue_type diag) IssueType.nullptr_dereference
++  | 3 -> IssueType.equal (Diagnostic.get_issue_type diag) IssueType.use_after_delete
++  | 4 -> IssueType.equal (Diagnostic.get_issue_type diag) IssueType.stack_variable_address_escape
++  | 5 -> IssueType.equal (Diagnostic.get_issue_type diag) IssueType.use_after_free
++  | _ -> false
++
++
++let dump_traces_for_ml =
++  if Config.pulse_train_mode then
++    fun diag astate ->
++      (* TODO: All the abstract states reachable here is the ContinueProgram type. *)
++      begin
++        let paths = AbductiveDomain.current_trace astate in
++        if interested_in diag && not (Hashtbl.mem diagnostics_trace paths) then
++          begin
++            Hashtbl.add diagnostics_trace paths ();
++            Hashtbl.add diagnostics diag ();
++            reachable astate visited_all;
++          end
++      end
++  else if Config.debug_mode then
++    fun _ astate -> L.debug Analysis Quiet "Covered: %a@\n" AbductiveDomain.pp_cover astate
++  else fun _ _ -> ()
++
++let add_call_edge caller callee =
++  let set = try StrMap.find caller !cg with _ -> StrSet.empty in
++  let set = StrSet.add callee set in
++  let ncg = StrMap.add caller set !cg in
++  cg := ncg
++
++let callee_tos callee =
++  Procname.to_unique_id callee
++
++let edge_is_existed caller callee =
++  let caller = callee_tos caller in
++  let callee = callee_tos callee in
++  try
++    let callees = StrMap.find caller !cg in
++    StrSet.mem callee callees
++  with _ -> false
++
++let unstrip str =
++  let drop c =
++    match c with
++    | ' ' | '\n' | '"' -> true
++    | _ -> false
++  in
++  let str = String.lstrip ~drop str in
++  let str = String.rstrip ~drop str in
++  str
++
++(** Splits a string [str] separated by [s] into a list of strings.
++ *  It treats a string of characters enclosed by a double quotation mark as a single string.
++ *)
++let split s str =
++  let len = (String.length str) - 1 in
++  let rec split curr pos lst mode =
++    if pos > len then
++      match mode with
++      | 0 -> curr::lst
++      | _ -> raise Exit
++    else
++      let npos = pos + 1 in
++      match String.get str pos with
++      | '"' when Int.equal mode 0 -> split curr npos lst 1
++      | '"' when Int.equal mode 1 -> split curr npos lst 0
++      | c when Char.equal s c && Int.equal mode 0 -> split "" npos (curr::lst) 0
++      | c -> split (curr^(String.make 1 c)) npos lst mode
++  in
++  if len < 0 then []
++  else List.rev (split "" 0 [] 0)
++
++let load_cg line =
++  let list = split ',' line in
++  match list with
++  | el1::el2::_ ->
++      let caller = unstrip el1 in
++      let callee = unstrip el2 in
++      add_call_edge caller callee
++  | _ -> raise Exit
++
++let initialized = ref false
++
++let init_cgs () =
++  if not !initialized then
++    begin
++      initialized := true;
++      match Config.pulse_cg_load with
++      | Some chan ->
++          begin
++            try
++              while true do load_cg (Stdlib.input_line chan) done
++            with _ ->
++              L.debug Analysis Quiet "CG loaded: %d@\n" (StrMap.cardinal !cg);
++              Stdlib.close_in chan;
++          end
++      | None -> ()
++    end
+diff --git a/infer/src/pulse/DumpTrace.mli b/infer/src/pulse/DumpTrace.mli
+new file mode 100644
+index 000000000..d06a77382
+--- /dev/null
++++ b/infer/src/pulse/DumpTrace.mli
+@@ -0,0 +1,22 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++open PulseBasicInterface
++open PulseDomainInterface
++
++type t = AbductiveDomain.t
++
++(** interfaces for ML *)
++val transition: string option -> MLVector.t option -> ExecutionDomain.t -> ExecutionDomain.t -> unit
++val add_transition: string option -> MLVector.t option -> t -> t -> unit
++val dump_traces_for_ml: Diagnostic.t -> t -> unit
++val edge_is_existed: Procname.t -> Procname.t -> bool
++val init_cgs: unit -> unit
++val add_coverage: string -> PathHistory.t -> unit
++val store_coverage : unit -> unit
++val load_coverage: unit -> unit
++val count_of_diags: unit -> int
+diff --git a/infer/src/pulse/Pulse.ml b/infer/src/pulse/Pulse.ml
+index 98e13a53b..f9f67b81f 100644
+--- a/infer/src/pulse/Pulse.ml
++++ b/infer/src/pulse/Pulse.ml
+@@ -35,6 +35,7 @@ let check_error_transform {InterproceduralAnalysis.proc_desc; err_log} ~f = func
+               (* HACK: report latent issues with a prominent message to distinguish them from
+                  non-latent. Useful for infer's own tests. *)
+               let diagnostic = LatentIssue.to_diagnostic latent_issue in
++              DumpTrace.dump_traces_for_ml diagnostic astate;
+               let extra_trace =
+                 let depth = 0 in
+                 let tags = [] in
+@@ -58,6 +59,15 @@ let proc_name_of_call call_exp =
+   | _ ->
+       None
+ 
++let cache = Caml.Hashtbl.create 3
++let proc_to_unique_id proc_desc =
++  try Caml.Hashtbl.find cache proc_desc
++  with _ ->
++    let proc = Procdesc.get_proc_name proc_desc in
++    let proc = Procname.to_unique_id proc in
++    Caml.Hashtbl.add cache proc_desc proc;
++    proc
++
+ 
+ module PulseTransferFunctions = struct
+   module CFG = ProcCfg.Normal
+@@ -74,7 +84,17 @@ module PulseTransferFunctions = struct
+     match proc_name_of_call call_exp with
+     | Some callee_pname when not Config.pulse_intraprocedural_only ->
+         let formals_opt = get_pvar_formals callee_pname in
+-        let callee_data = analyze_dependency callee_pname in
++        (* For recorded call-graph *)
++        let callee_data =
++          if Option.is_some Config.pulse_cg_load then
++            if DumpTrace.edge_is_existed (Procdesc.get_proc_name proc_desc) callee_pname then
++              analyze_dependency callee_pname
++            else
++              begin
++                None
++              end
++          else analyze_dependency callee_pname
++        in
+         PulseOperations.call ~caller_proc_desc:proc_desc ~callee_data call_loc callee_pname ~ret
+           ~actuals ~formals_opt astate
+     | _ ->
+@@ -102,9 +122,11 @@ module PulseTransferFunctions = struct
+   let exec_object_out_of_scope call_loc (pvar, typ) exec_state =
+     match (exec_state : ExecutionDomain.t) with
+     | ContinueProgram astate ->
++        let orig = astate in
+         let gone_out_of_scope = Invalidation.GoneOutOfScope (pvar, typ) in
+         let* astate, out_of_scope_base = PulseOperations.eval call_loc (Exp.Lvar pvar) astate in
+         (* invalidate [&x] *)
++        DumpTrace.add_transition None None orig astate;
+         PulseOperations.invalidate call_loc gone_out_of_scope out_of_scope_base astate
+         >>| ExecutionDomain.continue
+     | AbortProgram _ | ExitProgram _ | LatentAbortProgram _ ->
+@@ -220,110 +242,172 @@ module PulseTransferFunctions = struct
+     let astates = List.fold ~f:call_dealloc dealloc_data ~init:[Domain.ContinueProgram astate] in
+     (astates, ret_vars)
+ 
+-
+   let exec_instr (astate : Domain.t) ({InterproceduralAnalysis.proc_desc} as analysis_data)
+-      _cfg_node (instr : Sil.instr) : Domain.t list =
+-    match astate with
+-    | AbortProgram _ | LatentAbortProgram _ ->
+-        (* We can also continue the analysis with the error state here
+-                 but there might be a risk we would get nonsense. *)
+-        [astate]
+-    | ExitProgram _ ->
+-        (* program already exited, simply propagate the exited state upwards  *)
+-        [astate]
+-    | ContinueProgram astate -> (
+-      match instr with
+-      | Load {id= lhs_id; e= rhs_exp; loc} ->
+-          (* [lhs_id := *rhs_exp] *)
+-          let result =
+-            let+ astate, rhs_addr_hist = PulseOperations.eval_deref loc rhs_exp astate in
+-            PulseOperations.write_id lhs_id rhs_addr_hist astate
+-          in
+-          check_error_continue analysis_data result
+-      | Store {e1= lhs_exp; e2= rhs_exp; loc} ->
+-          (* [*lhs_exp := rhs_exp] *)
+-          let event = ValueHistory.Assignment loc in
+-          let result =
+-            let* astate, (rhs_addr, rhs_history) = PulseOperations.eval loc rhs_exp astate in
+-            let* astate, lhs_addr_hist = PulseOperations.eval loc lhs_exp astate in
+-            let* astate =
+-              PulseOperations.write_deref loc ~ref:lhs_addr_hist
+-                ~obj:(rhs_addr, event :: rhs_history)
+-                astate
+-            in
+-            match lhs_exp with
+-            | Lvar pvar when Pvar.is_return pvar ->
+-                PulseOperations.check_address_escape loc proc_desc rhs_addr rhs_history astate
+-            | _ ->
+-                Ok astate
+-          in
+-          check_error_continue analysis_data result
+-      | Prune (condition, loc, _is_then_branch, _if_kind) ->
+-          PulseOperations.prune loc ~condition astate
+-          |> check_error_transform analysis_data ~f:(fun astate ->
+-                 if PulseArithmetic.is_unsat_cheap astate then
+-                   (* [condition] is known to be unsatisfiable: prune path *)
+-                   []
+-                 else
+-                   (* [condition] is true or unknown value: go into the branch *)
+-                   [Domain.ContinueProgram astate] )
+-      | Call (ret, call_exp, actuals, loc, call_flags) ->
+-          dispatch_call analysis_data ret call_exp actuals loc call_flags astate
+-          |> check_error_transform analysis_data ~f:(fun id -> id)
+-      | Metadata (ExitScope (vars, location)) ->
+-          let remove_vars vars astates =
+-            List.fold
+-              ~f:(fun astates (astate : Domain.t) ->
+-                match astate with
+-                | AbortProgram _ | ExitProgram _ | LatentAbortProgram _ ->
+-                    [astate]
+-                | ContinueProgram astate ->
+-                    let astate =
+-                      PulseOperations.remove_vars vars location astate
+-                      |> check_error_continue analysis_data
+-                    in
+-                    List.rev_append astate astates )
+-              ~init:[] astates
+-          in
+-          if Procname.is_java (Procdesc.get_proc_name proc_desc) then
+-            remove_vars vars [Domain.ContinueProgram astate]
++      cfg_node (instr : Sil.instr) : Domain.t list =
++    let outs =
++      match astate with
++      | AbortProgram _ | LatentAbortProgram _ ->
++          (* We can also continue the analysis with the error state here
++                   but there might be a risk we would get nonsense. *)
++          [astate]
++      | ExitProgram _ ->
++          (* program already exited, simply propagate the exited state upwards  *)
++          [astate]
++      | ContinueProgram astate -> (
++        let astate =
++          if Config.pulse_coverage then
++            begin
++              (* For node coverage. Note: this will be executed even if the node doesn't have instructions. *)
++              let proc = proc_to_unique_id proc_desc in
++              let node = Procdesc.Node.uniq_int (Procdesc.Node.get_id cfg_node) in
++              AbductiveDomain.add_covered_node proc node astate
++            end
+           else
+-            (* Here we add and execute calls to dealloc for Objective-C objects
+-               before removing the variables *)
+-            let astates, ret_vars =
+-              execute_injected_dealloc_calls analysis_data vars astate location
++            astate
++        in
++        match instr with
++        | Load {id= lhs_id; e= rhs_exp; loc} ->
++            (* [lhs_id := *rhs_exp] *)
++            let result =
++              let+ astate, rhs_addr_hist = PulseOperations.eval_deref loc rhs_exp astate in
++              PulseOperations.write_id lhs_id rhs_addr_hist astate
+             in
+-            (* OPTIM: avoid re-allocating [vars] when [ret_vars] is empty
+-               (in particular if no ObjC objects are involved), but otherwise
+-               assume [ret_vars] is potentially larger than [vars] and so
+-               append [vars] to [ret_vars]. *)
+-            let vars_to_remove =
+-              if List.is_empty ret_vars then vars else List.rev_append vars ret_vars
++            check_error_continue analysis_data result
++        | Store {e1= lhs_exp; e2= rhs_exp; loc} ->
++            (* [*lhs_exp := rhs_exp] *)
++            let event = ValueHistory.Assignment loc in
++            let orig = astate in
++            let result =
++              let* astate, (rhs_addr, rhs_history) = PulseOperations.eval loc rhs_exp astate in
++              let* astate, lhs_addr_hist = PulseOperations.eval loc lhs_exp astate in
++              let* astate =
++                DumpTrace.add_transition None None orig astate;
++                PulseOperations.write_deref loc ~ref:lhs_addr_hist
++                  ~obj:(rhs_addr, event :: rhs_history)
++                  astate
++              in
++              match lhs_exp with
++              | Lvar pvar when Pvar.is_return pvar ->
++                  DumpTrace.add_transition None None orig astate;
++                  PulseOperations.check_address_escape loc proc_desc rhs_addr rhs_history astate
++              | _ ->
++                  Ok astate
+             in
+-            remove_vars vars_to_remove astates
+-      | Metadata (VariableLifetimeBegins (pvar, _, location)) when not (Pvar.is_global pvar) ->
+-          [PulseOperations.realloc_pvar pvar location astate |> Domain.continue]
+-      | Metadata (Abstract _ | VariableLifetimeBegins _ | Nullify _ | Skip) ->
+-          [Domain.ContinueProgram astate] )
+-
++            check_error_continue analysis_data result
++        | Prune (condition, loc, _is_then_branch, _if_kind) ->
++            PulseOperations.prune loc ~condition astate
++            |> check_error_transform analysis_data ~f:(fun astate ->
++                   if PulseArithmetic.is_unsat_cheap astate then
++                     (* [condition] is known to be unsatisfiable: prune path *)
++                     []
++                   else
++                     (* [condition] is true or unknown value: go into the branch *)
++                     [Domain.ContinueProgram astate] )
++        | Call (ret, call_exp, actuals, loc, call_flags) ->
++            dispatch_call analysis_data ret call_exp actuals loc call_flags astate
++            |> check_error_transform analysis_data ~f:(fun id -> id)
++        | Metadata (ExitScope (vars, location)) ->
++            let remove_vars vars astates =
++              List.fold
++                ~f:(fun astates (astate : Domain.t) ->
++                  match astate with
++                  | AbortProgram _ | ExitProgram _ | LatentAbortProgram _ ->
++                      [astate]
++                  | ContinueProgram astate ->
++                      let astate =
++                        PulseOperations.remove_vars vars location astate
++                        |> check_error_continue analysis_data
++                      in
++                      List.rev_append astate astates )
++                ~init:[] astates
++            in
++            if Procname.is_java (Procdesc.get_proc_name proc_desc) then
++              remove_vars vars [Domain.ContinueProgram astate]
++            else
++              (* Here we add and execute calls to dealloc for Objective-C objects
++                 before removing the variables *)
++              let astates, ret_vars =
++                execute_injected_dealloc_calls analysis_data vars astate location
++              in
++              (* OPTIM: avoid re-allocating [vars] when [ret_vars] is empty
++                 (in particular if no ObjC objects are involved), but otherwise
++                 assume [ret_vars] is potentially larger than [vars] and so
++                 append [vars] to [ret_vars]. *)
++              let vars_to_remove =
++                if List.is_empty ret_vars then vars else List.rev_append vars ret_vars
++              in
++              remove_vars vars_to_remove astates
++        | Metadata (VariableLifetimeBegins (pvar, _, location)) when not (Pvar.is_global pvar) ->
++            [PulseOperations.realloc_pvar pvar location astate |> Domain.continue]
++        | Metadata (Abstract _ | VariableLifetimeBegins _ | Nullify _ | Skip) ->
++            [Domain.ContinueProgram astate] )
++    in
++    (* transition: from before to after an instruction *)
++    let str =
++      if Config.debug_mode then
++        let pp_proc fmt node = node |> Procdesc.Node.get_proc_name |> Procname.pp fmt in
++        let pp_node fmt node = node |> Procdesc.Node.pp fmt in
++        let pp = Sil.pp_instr ~print_types:false Pp.text in
++        let str = F.asprintf "%a - %a:%a" pp_proc cfg_node pp_node cfg_node pp instr in
++        Some str
++      else
++        None
++    in
++    let vs = MLVector.vector (Procdesc.Node.feature_vector cfg_node) in
++    List.iter outs ~f:(DumpTrace.transition str (Some vs) astate);
++    outs
+ 
+   let pp_session_name _node fmt = F.pp_print_string fmt "Pulse"
+ end
+ 
++module PulseTransferFunctionsML = struct
++  include PulseTransferFunctions
++  module Domain = ExecutionDomain
++end
++
+ module DisjunctiveAnalyzer =
+-  AbstractInterpreter.MakeDisjunctive
+-    (PulseTransferFunctions)
++  AbstractInterpreter.MakeDisjunctiveML
++    (PulseTransferFunctionsML)
+     (struct
+       let join_policy = `UnderApproximateAfter Config.pulse_max_disjuncts
+ 
+       let widen_policy = `UnderApproximateAfterNumIterations Config.pulse_widen_threshold
+     end)
+ 
++let analyzed_fn = ref 0
++let counter () =
++  analyzed_fn := !analyzed_fn + 1;
++  Config.pulse_limit_fn <> 0 && !analyzed_fn >= Config.pulse_limit_fn
++
+ let checker ({InterproceduralAnalysis.proc_desc} as analysis_data) =
+   AbstractValue.State.reset () ;
+   let initial = [ExecutionDomain.mk_initial proc_desc] in
+-  match DisjunctiveAnalyzer.compute_post analysis_data ~initial proc_desc with
+-  | Some posts ->
+-      Some (PulseSummary.of_posts proc_desc posts)
+-  | None ->
+-      None
++  (* limit the number of analyzed functions *)
++  if counter () then None
++  else
++    let rec compute () =
++      let old_cnt = DumpTrace.count_of_diags () in
++      match DisjunctiveAnalyzer.compute_post analysis_data ~initial proc_desc with
++      | Some posts ->
++         let summary = PulseSummary.of_posts proc_desc posts in
++         let rec map lst1 lst2 =
++           match lst1, lst2 with
++           | [], [] -> ()
++           | h1::tl1, h2::tl2 ->
++              (* at the end of the function. it creates a summary *)
++              DumpTrace.transition None None h1 (h2: ExecutionDomain.summary :> ExecutionDomain.t);
++              map tl1 tl2
++           | _ -> ()
++         in
++         map posts summary;
++         let sset = PulseSummary.dead_traces posts in
++         let name = Procdesc.get_proc_name proc_desc in
++         let name = Procname.to_unique_id name in
++         PulseDeadTrace.register sset name;
++         let new_cnt = DumpTrace.count_of_diags () in
++         if Config.pulse_repeat_mode && new_cnt > old_cnt then compute ()
++         else Some summary
++      | None ->
++         None
++    in
++    compute ()
+diff --git a/infer/src/pulse/PulseAbductiveDomain.ml b/infer/src/pulse/PulseAbductiveDomain.ml
+index 3367aa27a..876fa29f3 100644
+--- a/infer/src/pulse/PulseAbductiveDomain.ml
++++ b/infer/src/pulse/PulseAbductiveDomain.ml
+@@ -13,6 +13,7 @@ module BaseDomain = PulseBaseDomain
+ module BaseStack = PulseBaseStack
+ module BaseMemory = PulseBaseMemory
+ module BaseAddressAttributes = PulseBaseAddressAttributes
++module PathHistory = PulsePathHistory
+ 
+ (** signature common to the "normal" [Domain], representing the post at the current program point,
+     and the inverted [PreDomain], representing the inferred pre-condition*)
+@@ -82,13 +83,11 @@ type t =
+   { post: PostDomain.t  (** state at the current program point*)
+   ; pre: PreDomain.t  (** inferred pre at the current program point *)
+   ; skipped_calls: SkippedCalls.t  (** set of skipped calls *)
+-  ; path_condition: PathCondition.t }
++  ; path_condition: PathCondition.t
++  ; covered_nodes: PathHistory.t
++  }
+ [@@deriving yojson_of]
+ 
+-let pp f {post; pre; path_condition; skipped_calls} =
+-  F.fprintf f "@[<v>%a@;%a@;PRE=[%a]@;skipped_calls=%a@]" PathCondition.pp path_condition
+-    PostDomain.pp post PreDomain.pp pre SkippedCalls.pp skipped_calls
+-
+ 
+ let set_path_condition path_condition astate = {astate with path_condition}
+ 
+@@ -141,7 +140,8 @@ module Stack = struct
+         ( { post= PostDomain.update astate.post ~stack:post_stack
+           ; pre
+           ; skipped_calls= astate.skipped_calls
+-          ; path_condition= astate.path_condition }
++          ; path_condition= astate.path_condition
++          ; covered_nodes = astate.covered_nodes }
+         , addr_hist )
+ 
+ 
+@@ -289,7 +289,8 @@ module Memory = struct
+         ( { post= PostDomain.update astate.post ~heap:post_heap
+           ; pre= PreDomain.update astate.pre ~heap:foot_heap
+           ; skipped_calls= astate.skipped_calls
+-          ; path_condition= astate.path_condition }
++          ; path_condition= astate.path_condition
++          ; covered_nodes = astate.covered_nodes }
+         , addr_hist_dst )
+ 
+ 
+@@ -326,7 +327,8 @@ let mk_initial proc_desc =
+     PreDomain.update ~stack:initial_stack ~heap:initial_heap PreDomain.empty
+   in
+   let post = PostDomain.update ~stack:initial_stack PostDomain.empty in
+-  {pre; post; skipped_calls= SkippedCalls.empty; path_condition= PathCondition.true_}
++  let covered_nodes = PathHistory.empty in
++  {pre; post; skipped_calls= SkippedCalls.empty; path_condition= PathCondition.true_; covered_nodes}
+ 
+ 
+ let add_skipped_call pname trace astate =
+@@ -344,6 +346,16 @@ let add_skipped_calls new_skipped_calls astate =
+   in
+   if phys_equal skipped_calls astate.skipped_calls then astate else {astate with skipped_calls}
+ 
++let add_covered_node proc node astate =
++  let new_covered_nodes = PathHistory.add proc node astate.covered_nodes in
++  if phys_equal new_covered_nodes astate.covered_nodes then astate
++  else {astate with covered_nodes= new_covered_nodes}
++
++let concat_covered_nodes paths astate =
++  let new_covered_nodes = PathHistory.adds paths astate.covered_nodes in
++  if phys_equal new_covered_nodes astate.covered_nodes then astate
++  else {astate with covered_nodes= new_covered_nodes}
++
+ 
+ let discard_unreachable ({pre; post} as astate) =
+   let pre_addresses = BaseDomain.reachable_addresses (pre :> BaseDomain.t) in
+@@ -479,3 +491,50 @@ let summary_of_post pdesc astate =
+ let get_pre {pre} = (pre :> BaseDomain.t)
+ 
+ let get_post {post} = (post :> BaseDomain.t)
++
++(** for ML *)
++let diff_stack_vars astate =
++  let prevars = BaseStack.cardinal (astate.pre :> base_domain).stack in
++  let postvars = BaseStack.cardinal (astate.post :> base_domain).stack in
++  postvars - prevars
++
++let skipped_calls astate = SkippedCalls.cardinal astate.skipped_calls
++
++let feature_vector astate =
++  let pre_vs = BaseDomain.feature_vector (astate.pre :> BaseDomain.t) in
++  let post_vs = BaseDomain.feature_vector (astate.post :> BaseDomain.t) in
++  let v1 = diff_stack_vars astate in
++  let v2 = skipped_calls astate in
++  pre_vs @ post_vs @ [v1; v2]
++
++let feature_pp fmt lst =
++  F.pp_print_string fmt "[ ";
++  List.iter lst ~f:(fun v -> F.pp_print_int fmt v;F.pp_print_string fmt ", ") ;
++  F.pp_print_string fmt " ]"
++
++
++let pp f {post; pre; path_condition; skipped_calls; covered_nodes} =
++  F.fprintf f "@[FV:%a@;<v>%a@;%a@;PRE=[%a]@;skipped_calls=%a@;covered=%a@]"
++    feature_pp (feature_vector {post; pre; path_condition; skipped_calls; covered_nodes})
++    PathCondition.pp path_condition
++    PostDomain.pp post PreDomain.pp pre SkippedCalls.pp skipped_calls PathHistory.pp covered_nodes
++
++let pp_cover f {covered_nodes} =
++  F.fprintf f "@[covered=%a@]" PathHistory.pp covered_nodes
++
++let keep_alternatives astate node =
++  let new_covered_nodes = PathHistory.update_last node astate.covered_nodes in
++  if phys_equal new_covered_nodes astate.covered_nodes then astate
++  else {astate with covered_nodes= new_covered_nodes}
++
++let keep_alternatives_s astate node =
++  let new_covered_nodes = PathHistory.update_last node astate.covered_nodes in
++  if phys_equal new_covered_nodes astate.covered_nodes then astate
++  else {astate with covered_nodes= new_covered_nodes}
++
++let dead_traces astate = PathHistory.dead_traces astate.covered_nodes
++let is_dead node astate =
++  let trace = PathHistory.current_trace astate.covered_nodes in
++  PulseDeadTrace.is_dead node trace
++let current_trace astate = PathHistory.current_trace astate.covered_nodes
++let pp_trace = PulseDeadTrace.pp_trace
+diff --git a/infer/src/pulse/PulseAbductiveDomain.mli b/infer/src/pulse/PulseAbductiveDomain.mli
+index 302a0d4c5..f06b1bba8 100644
+--- a/infer/src/pulse/PulseAbductiveDomain.mli
++++ b/infer/src/pulse/PulseAbductiveDomain.mli
+@@ -12,6 +12,7 @@ module BaseAddressAttributes = PulseBaseAddressAttributes
+ module BaseDomain = PulseBaseDomain
+ module BaseMemory = PulseBaseMemory
+ module BaseStack = PulseBaseStack
++module PathHistory = PulsePathHistory
+ 
+ (** Layer on top of {!BaseDomain} to propagate operations on the current state to the pre-condition
+     when necessary
+@@ -57,7 +58,8 @@ type t = private
+   { post: PostDomain.t  (** state at the current program point*)
+   ; pre: PreDomain.t  (** inferred pre at the current program point *)
+   ; skipped_calls: SkippedCalls.t  (** set of skipped calls *)
+-  ; path_condition: PathCondition.t  (** arithmetic facts *) }
++  ; path_condition: PathCondition.t  (** arithmetic facts *)
++  ; covered_nodes: PathHistory.t }
+ 
+ val leq : lhs:t -> rhs:t -> bool
+ 
+@@ -178,3 +180,16 @@ val incorporate_new_eqs : t -> PathCondition.t * PathCondition.new_eqs -> PathCo
+     e.g. [x = 0] is not compatible with [x] being allocated, and [x = y] is not compatible with [x]
+     and [y] being allocated separately. In those cases, the resulting path condition is
+     {!PathCondition.false_}. *)
++
++(** ML feature vectors *)
++val feature_vector : t -> int list
++val keep_alternatives : t -> string * int -> t
++val keep_alternatives_s : summary -> string * int -> summary
++
++val add_covered_node : string -> int -> t -> t
++val concat_covered_nodes : PathHistory.t -> t -> t
++val pp_cover : Format.formatter -> t -> unit
++val dead_traces : t -> PulseDeadTrace.SSet.t
++val is_dead : string * int -> t -> bool
++val current_trace : t -> PulseDeadTrace.Set.t
++val pp_trace : Format.formatter -> PulseDeadTrace.Set.t -> unit
+diff --git a/infer/src/pulse/PulseAbstractValue.ml b/infer/src/pulse/PulseAbstractValue.ml
+index 576c12dae..de75383fe 100644
+--- a/infer/src/pulse/PulseAbstractValue.ml
++++ b/infer/src/pulse/PulseAbstractValue.ml
+@@ -27,6 +27,8 @@ let yojson_of_t l = `String (F.asprintf "%a" pp l)
+ 
+ let of_id v = v
+ 
++let to_id l: int = l
++
+ module PPKey = struct
+   type nonrec t = t [@@deriving compare]
+ 
+diff --git a/infer/src/pulse/PulseAbstractValue.mli b/infer/src/pulse/PulseAbstractValue.mli
+index 97f2e7260..38493bc07 100644
+--- a/infer/src/pulse/PulseAbstractValue.mli
++++ b/infer/src/pulse/PulseAbstractValue.mli
+@@ -18,6 +18,8 @@ val pp : F.formatter -> t -> unit
+ 
+ val of_id : int -> t
+ 
++val to_id : t -> int
++
+ module Constants : sig
+   val get_int : IntLit.t -> t
+   (** Get or create an abstract value associated with a constant {!IntLit.t}. The idea is that
+diff --git a/infer/src/pulse/PulseBaseDomain.ml b/infer/src/pulse/PulseBaseDomain.ml
+index c854f2ea3..b87059ed1 100644
+--- a/infer/src/pulse/PulseBaseDomain.ml
++++ b/infer/src/pulse/PulseBaseDomain.ml
+@@ -257,3 +257,31 @@ let reachable_addresses astate =
+     ~init:() ~finish:Fn.id
+     ~f:(fun () _ _ _ -> Continue ())
+   |> fst
++
++
++(** for ML *)
++let count fattr base =
++  AddressAttributes.fold (fun _ attrs i ->
++      if fattr attrs |> Option.is_some
++      then i + 1
++      else i)
++    base.attrs 0
++
++let num_of_must_be_valid = count Attributes.get_must_be_valid
++let num_of_written_to = count Attributes.get_written_to
++let num_of_invalids = count Attributes.get_invalid
++let num_of_allocated = count Attributes.get_allocation
++let num_of_stack_var_addresses = count Attributes.get_address_of_stack_variable
++
++let feature_vector t =
++  (* heap *)
++  let v1 = Memory.cardinal t.heap in
++  (* attribute *)
++  let v2 = num_of_must_be_valid t in
++  let v3 = num_of_written_to t in
++  let v4 = num_of_invalids t in
++  let v5 = num_of_allocated t in
++  (* stack *)
++  let v6 = Stack.cardinal t.stack in
++  let v7 = num_of_stack_var_addresses t in
++  [v1; v2; v3; v4; v5; v6; v7]
+diff --git a/infer/src/pulse/PulseBaseDomain.mli b/infer/src/pulse/PulseBaseDomain.mli
+index fe60e57ea..48f4fb550 100644
+--- a/infer/src/pulse/PulseBaseDomain.mli
++++ b/infer/src/pulse/PulseBaseDomain.mli
+@@ -35,3 +35,6 @@ val is_isograph : lhs:t -> rhs:t -> mapping -> bool
+ val find_cell_opt : AbstractValue.t -> t -> cell option
+ 
+ val pp : F.formatter -> t -> unit
++
++(** ML feature vectors *)
++val feature_vector : t -> int list
+diff --git a/infer/src/pulse/PulseBaseMemory.ml b/infer/src/pulse/PulseBaseMemory.ml
+index e0a55a537..c1b8ab3b3 100644
+--- a/infer/src/pulse/PulseBaseMemory.ml
++++ b/infer/src/pulse/PulseBaseMemory.ml
+@@ -56,3 +56,5 @@ let find_edge_opt addr access memory =
+ let yojson_of_t g = [%yojson_of: (AbstractValue.t * Edges.t) list] (Graph.bindings g)
+ 
+ include Graph
++
++let compare = Graph.compare
+diff --git a/infer/src/pulse/PulseDeadTrace.ml b/infer/src/pulse/PulseDeadTrace.ml
+new file mode 100644
+index 000000000..5b1782cfc
+--- /dev/null
++++ b/infer/src/pulse/PulseDeadTrace.ml
+@@ -0,0 +1,143 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++module F = Format
++
++type elem = string * int [@@deriving compare]
++
++let pp_elem = PulsePathHistory.pp_elem
++
++module Set = PulsePathHistory.Set
++module ESet = PulsePathHistory.ESet
++module EMap = PulsePathHistory.EMap
++
++let equal_elem = PulsePathHistory.equal_elem
++
++type t = Set.t * elem
++
++let pp f (covpath,last) =
++    F.fprintf f "{ elems=%a;@\n lastBranch=%a; }"
++      Set.pp covpath
++      pp_elem last
++
++module SSet = PulsePathHistory.SSet
++
++let (<=) (s1,e1) (s2,e2) = Set.subset s1 s2 && not (equal_elem e1 e2)
++
++
++module StrKey = struct
++  type t = string [@@deriving compare]
++end
++
++module StrMap = Caml.Map.Make(StrKey)
++
++let results = ref StrMap.empty
++
++let iter f = StrMap.iter (fun _ ss -> SSet.iter f ss) !results
++
++let pp_elem f (p1,n1) = F.fprintf f "(%s@%s)" p1 (string_of_int n1)
++
++let unstrip str =
++  let ldrop c =
++    match c with
++    | '(' | ' ' | '\n' | '"' -> true
++    | _ -> false
++  in
++  let rdrop c =
++    match c with
++    | ')' | ' ' | '\n' | '"' -> true
++    | _ -> false
++  in
++  let str = String.lstrip ~drop:ldrop str in
++  let str = String.rstrip ~drop:rdrop str in
++  str
++
++(** Splits a string [str] separated by [s] into a list of strings.
++ *  It treats a string of characters enclosed by a double quotation mark as a single string.
++ *)
++let split s str =
++  let len = (String.length str) - 1 in
++  let rec split curr pos lst mode =
++    if pos > len then
++      match mode with
++      | 0 -> curr::lst
++      | _ -> raise Exit
++    else
++      let npos = pos + 1 in
++      match String.get str pos with
++      | '"' when Int.equal mode 0 -> split curr npos lst 1
++      | '"' when Int.equal mode 1 -> split curr npos lst 0
++      | c when Char.equal s c && Int.equal mode 0 -> split "" npos (curr::lst) 0
++      | c -> split (curr^(String.make 1 c)) npos lst mode
++  in
++  if len < 0 then []
++  else List.rev (split "" 0 [] 0)
++
++
++let parse_elem str =
++  let str = unstrip str in
++  let arr = split '@' str in
++  match arr with
++  | hd::tl::_ ->
++     (hd, int_of_string tl)
++  | _ -> raise Exit
++
++let deadends = ref StrMap.empty
++
++let parse_edge str =
++  match split '%' str with
++  | hd::tl::_ ->
++     let e1 = parse_elem hd in
++     let e2 = parse_elem tl in
++     (e1,e2)
++  | _ -> raise Exit
++
++let add last set =
++  let str = F.asprintf "%a" pp_elem last in
++  let sset = try StrMap.find str !deadends with _ -> SSet.empty in
++  let set = SSet.add (set,last) sset in
++  deadends := StrMap.add str set !deadends
++
++let register sset name =
++  if StrMap.mem name !results
++   then
++     begin
++       let old_sset = StrMap.find name !results in
++       results := StrMap.add name (SSet.union old_sset sset) !results
++     end
++  else
++    begin
++      results := StrMap.add name sset !results
++    end;
++  SSet.iter (fun (set,last) -> add last set) sset
++
++(* remove local dead-traces *)
++let cb_generalize scaller scallee =
++  let caller = try StrMap.find scaller !results with _ -> SSet.empty in
++  let callee = try StrMap.find scallee !results with _ -> SSet.empty in
++  let callee_new = SSet.filter (fun se1 -> not (SSet.exists (fun se2 -> se1 <= se2) caller)) callee in
++  register callee_new scallee
++
++let size () =
++  StrMap.fold (fun _ x acc -> (SSet.cardinal x) + acc) !deadends 0
++
++let serialize_set f set =
++  Set.iter (fun (e1,e2) -> F.fprintf f "%a%%%a\n" pp_elem e1 pp_elem e2) set
++
++let serialize f (covpath,last) =
++  F.fprintf f "%a\n%d\n%a" pp_elem last (Set.cardinal covpath) serialize_set covpath
++
++let deadtraces_at elem =
++  let str = F.asprintf "%a" pp_elem elem in
++  try StrMap.find str !deadends with _ -> SSet.empty
++
++let is_dead node set =
++  let sset = deadtraces_at node in
++  SSet.exists (fun (s,_) -> Set.subset s set && Set.subset set s) sset
++
++let pp_trace f trace =
++  F.fprintf f "{ %a@\n }" Set.pp trace
+diff --git a/infer/src/pulse/PulseDeadTrace.mli b/infer/src/pulse/PulseDeadTrace.mli
+new file mode 100644
+index 000000000..b5bb1cefd
+--- /dev/null
++++ b/infer/src/pulse/PulseDeadTrace.mli
+@@ -0,0 +1,37 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++module F = Format
++
++type elem = string * int [@@deriving compare]
++
++module Set = PulsePathHistory.Set
++module ESet = PulsePathHistory.ESet
++module EMap = PulsePathHistory.EMap
++
++type t = Set.t * elem
++
++val pp : F.formatter -> t -> unit
++
++module SSet = PulsePathHistory.SSet
++
++val pp_elem : F.formatter -> elem -> unit
++
++val register : SSet.t -> string -> unit
++
++val cb_generalize : string -> string -> unit
++
++val iter : (t -> unit) -> unit
++val serialize : F.formatter -> t -> unit
++
++val parse_elem : string -> elem
++val parse_edge : string -> elem * elem
++val add : elem -> Set.t -> unit
++val size : unit -> int
++
++val is_dead : string * int -> Set.t -> bool
++val pp_trace : Format.formatter -> Set.t -> unit
+diff --git a/infer/src/pulse/PulseDomainInterface.ml b/infer/src/pulse/PulseDomainInterface.ml
+index d49e9c972..3bb5bb6f0 100644
+--- a/infer/src/pulse/PulseDomainInterface.ml
++++ b/infer/src/pulse/PulseDomainInterface.ml
+@@ -22,6 +22,7 @@ module BaseStack = PulseBaseStack
+ module BaseMemory = PulseBaseMemory
+ module BaseAddressAttributes = PulseBaseAddressAttributes
+ module LatentIssue = PulseLatentIssue
++module PathHistory = PulsePathHistory
+ 
+ (** {2 Enforce short form usage} *)
+ 
+diff --git a/infer/src/pulse/PulseExecutionDomain.ml b/infer/src/pulse/PulseExecutionDomain.ml
+index 5dd022ac9..fbfcdddf8 100644
+--- a/infer/src/pulse/PulseExecutionDomain.ml
++++ b/infer/src/pulse/PulseExecutionDomain.ml
+@@ -90,3 +90,49 @@ let summary_of_posts pdesc posts =
+           (map exec_state ~f:(fun _astate ->
+                (* prefer [astate] since it is an equivalent state that has been normalized *)
+                AbductiveDomain.summary_of_post pdesc astate )) )
++
++
++let get_astate : t -> AbductiveDomain.t = function
++  | ContinueProgram astate | ExitProgram astate -> astate
++  | AbortProgram astate -> (astate :> AbductiveDomain.t)
++  | LatentAbortProgram {astate} ->
++      (astate :> AbductiveDomain.t)
++
++(** feature vectors *)
++let feature_vector a =
++  get_astate a
++  |> AbductiveDomain.feature_vector
++
++let keep_alternatives a node =
++  match a with
++  | ContinueProgram astate -> ContinueProgram (AbductiveDomain.keep_alternatives astate node)
++  | ExitProgram astate -> ExitProgram (AbductiveDomain.keep_alternatives astate node)
++  | AbortProgram astate -> AbortProgram (AbductiveDomain.keep_alternatives_s astate node)
++  | LatentAbortProgram ds ->
++     let astate = AbductiveDomain.keep_alternatives_s ds.astate node in
++     LatentAbortProgram { ds with astate }
++
++let coverage a =
++  let a = get_astate a in
++  a.AbductiveDomain.covered_nodes
++
++type coverage = PulsePathHistory.t
++let empty_covered = PulsePathHistory.empty
++let add_covered cov a =
++  match a with
++  | ContinueProgram astate ->
++     let covs = astate.AbductiveDomain.covered_nodes in
++     PulsePathHistory.adds cov covs
++  | _ -> cov
++
++let new_covered cov a =
++  let covs = (get_astate a).AbductiveDomain.covered_nodes in
++  PulsePathHistory.count (PulsePathHistory.minus covs cov)
++
++let dead_traces astate =
++  let astate = get_astate astate in
++  AbductiveDomain.dead_traces astate
++
++let is_dead node astate =
++  let astate = get_astate astate in
++  AbductiveDomain.is_dead node astate
+diff --git a/infer/src/pulse/PulseExecutionDomain.mli b/infer/src/pulse/PulseExecutionDomain.mli
+index f5540628f..21b70a7da 100644
+--- a/infer/src/pulse/PulseExecutionDomain.mli
++++ b/infer/src/pulse/PulseExecutionDomain.mli
+@@ -19,7 +19,7 @@ type 'abductive_domain_t base_t =
+ 
+ type t = AbductiveDomain.t base_t
+ 
+-include AbstractDomain.NoJoin with type t := t
++include AbstractDomain.NoJoinForML with type t := t
+ 
+ val continue : AbductiveDomain.t -> t
+ 
+@@ -28,3 +28,17 @@ val mk_initial : Procdesc.t -> t
+ type summary = AbductiveDomain.summary base_t [@@deriving yojson_of]
+ 
+ val summary_of_posts : Procdesc.t -> t list -> summary list
++
++val feature_vector : t -> int list
++
++val coverage : t -> PulsePathHistory.t
++
++type coverage = PulsePathHistory.t
++val empty_covered : coverage
++val add_covered : coverage -> t -> coverage
++val new_covered : coverage -> t -> int
++
++val keep_alternatives : t -> string * int -> t
++val dead_traces : t -> PulseDeadTrace.SSet.t
++
++val is_dead : string * int -> t -> bool
+diff --git a/infer/src/pulse/PulseFormula.ml b/infer/src/pulse/PulseFormula.ml
+index 5d4f3c31c..5b8b9b38c 100644
+--- a/infer/src/pulse/PulseFormula.ml
++++ b/infer/src/pulse/PulseFormula.ml
+@@ -533,8 +533,7 @@ module Term = struct
+         q_map2 t1 t2 Q.mul
+     | Div (t1, t2) ->
+         q_map2 t1 t2 Q.div
+-    | Mod (t1, t2) ->
+-        q_map2 t1 t2 (fun c1 c2 -> map_z_z c1 c2 Z.( mod ) |> or_undef)
++    | Mod _ -> (ignore map_z_z; t0)
+     | Not t' ->
+         q_predicate_map t' Q.is_zero
+     | And (t1, t2) ->
+@@ -1274,6 +1273,13 @@ module Formula = struct
+       (* [φ ⊢ a] iff [φ ∧ ¬a] is inconsistent *)
+       match and_atom (Atom.nnot atom) (phi, []) with Sat _ -> false | Unsat -> true
+   end
++
++  (* for ML *)
++  let feature_vector phi = (* TODO *)
++    let v1 = VarUF.fold_congruences phi.var_eqs ~init:0 ~f:(fun acc _ -> acc + 1) in
++    let v2 = Var.Map.cardinal phi.linear_eqs in
++    let v3 = Atom.Set.cardinal phi.atoms in
++    [v1; v2; v3]
+ end
+ 
+ (** Instead of a single formula, distinguish what we have observed to be true (coming from
+@@ -1549,3 +1555,9 @@ let as_int phi v =
+ (** test if [phi.known ⊢ phi.pruned] *)
+ let has_no_assumptions phi =
+   Atom.Set.for_all (fun atom -> Formula.Normalizer.implies_atom phi.known atom) phi.pruned
++
++let feature_vector phi =
++  let vs1 = Formula.feature_vector phi.known in
++  let v1 = Atom.Set.cardinal phi.pruned in
++  let vs2 = Formula.feature_vector phi.both in
++  vs1 @ [v1] @ vs2
+diff --git a/infer/src/pulse/PulseFormula.mli b/infer/src/pulse/PulseFormula.mli
+index 0b08a34c7..b6c95648f 100644
+--- a/infer/src/pulse/PulseFormula.mli
++++ b/infer/src/pulse/PulseFormula.mli
+@@ -92,3 +92,6 @@ include sig
+     val ( let* ) : 'a normalized -> ('a -> 'b normalized) -> 'b normalized
+   end
+ end
++
++(* for ML *)
++val feature_vector : t -> int list
+diff --git a/infer/src/pulse/PulseInterproc.ml b/infer/src/pulse/PulseInterproc.ml
+index a34fb486c..343285987 100644
+--- a/infer/src/pulse/PulseInterproc.ml
++++ b/infer/src/pulse/PulseInterproc.ml
+@@ -115,11 +115,12 @@ let visit call_state ~pre ~addr_callee ~addr_hist_caller =
+       ; rev_subst= AddressMap.add addr_caller addr_callee call_state.rev_subst } )
+ 
+ 
+-let pp f {AbductiveDomain.pre; post; path_condition; skipped_calls} =
++let pp f {AbductiveDomain.pre; post; path_condition; skipped_calls; covered_nodes} =
+   F.fprintf f "COND:@\n  @[%a@]@\n" PathCondition.pp path_condition ;
+   F.fprintf f "PRE:@\n  @[%a@]@\n" BaseDomain.pp (pre :> BaseDomain.t) ;
+   F.fprintf f "POST:@\n  @[%a@]@\n" BaseDomain.pp (post :> BaseDomain.t) ;
+-  F.fprintf f "SKIPPED_CALLS:@ @[%a@]@\n" SkippedCalls.pp skipped_calls
++  F.fprintf f "SKIPPED_CALLS:@ @[%a@]@\n" SkippedCalls.pp skipped_calls ;
++  F.fprintf f "COVERED:@\n @[%a@]@\n" PathHistory.pp covered_nodes
+ 
+ 
+ (* {3 reading the pre from the current state} *)
+@@ -478,6 +479,14 @@ let record_skipped_calls callee_proc_name call_loc pre_post call_state =
+   {call_state with astate}
+ 
+ 
++let record_covered_nodes pre_post call_state =
++  if Config.pulse_coverage then
++    let covered_nodes_of_callee = pre_post.AbductiveDomain.covered_nodes in
++    let astate = AbductiveDomain.concat_covered_nodes covered_nodes_of_callee call_state.astate in
++    {call_state with astate}
++  else
++    call_state
++
+ let apply_post callee_proc_name call_location pre_post ~captured_vars_with_actuals ~formals ~actuals
+     call_state =
+   PerfEvent.(log (fun logger -> log_begin_event logger ~name:"pulse call post" ())) ;
+@@ -490,6 +499,7 @@ let apply_post callee_proc_name call_location pre_post ~captured_vars_with_actua
+     |> fun (call_state, return_caller) ->
+     record_post_remaining_attributes callee_proc_name call_location pre_post call_state
+     |> record_skipped_calls callee_proc_name call_location pre_post
++    |> record_covered_nodes pre_post
+     |> conjoin_callee_arith pre_post
+     |> fun {astate; _} -> (astate, return_caller)
+   in
+@@ -518,9 +528,10 @@ let check_all_valid callee_proc_name call_location {AbductiveDomain.pre; _} call
+             AddressAttributes.check_valid access_trace addr_caller astate
+             |> Result.map_error ~f:(fun (invalidation, invalidation_trace) ->
+                    L.d_printfln "ERROR: caller's %a invalid!" AbstractValue.pp addr_caller ;
+-                   ( Diagnostic.AccessToInvalidAddress
+-                       {calling_context= []; invalidation; invalidation_trace; access_trace}
+-                   , astate ) ) ) )
++                   let diagnostic = Diagnostic.AccessToInvalidAddress
++                           {calling_context= []; invalidation; invalidation_trace; access_trace} in
++                   DumpTrace.dump_traces_for_ml diagnostic astate;
++                   ( diagnostic, astate ) ) ) )
+     call_state.subst (Ok call_state.astate)
+ 
+ 
+diff --git a/infer/src/pulse/PulseModels.ml b/infer/src/pulse/PulseModels.ml
+index 340241558..199c150d2 100644
+--- a/infer/src/pulse/PulseModels.ml
++++ b/infer/src/pulse/PulseModels.ml
+@@ -488,10 +488,11 @@ module StdFunction = struct
+       let event = ValueHistory.Call {f= Model "std::function::operator()"; location; in_call= []} in
+       [PulseOperations.havoc_id ret_id [event] astate]
+     in
+-    let* astate, (lambda, _) =
++    let* astate_new, (lambda, _) =
+       PulseOperations.eval_access location lambda_ptr_hist Dereference astate
+     in
+-    let* astate = PulseOperations.Closures.check_captured_addresses location lambda astate in
++    let _ = DumpTrace.add_transition None None astate astate_new in
++    let* astate = PulseOperations.Closures.check_captured_addresses location lambda astate_new in
+     match AddressAttributes.get_closure_proc_name lambda astate with
+     | None ->
+         (* we don't know what proc name this lambda resolves to *)
+@@ -579,10 +580,10 @@ module GenericArrayBackedCollectionIterator = struct
+       if AddressAttributes.is_end_of_collection (fst pointer) astate && not is_minus_minus then
+         let invalidation_trace = Trace.Immediate {location; history= []} in
+         let access_trace = Trace.Immediate {location; history= snd pointer} in
+-        Error
+-          ( Diagnostic.AccessToInvalidAddress
+-              {calling_context= []; invalidation= EndIterator; invalidation_trace; access_trace}
+-          , astate )
++        let diagnostic = Diagnostic.AccessToInvalidAddress
++            {calling_context= []; invalidation= EndIterator; invalidation_trace; access_trace} in
++        DumpTrace.dump_traces_for_ml diagnostic astate;
++        Error ( diagnostic, astate )
+       else Ok astate
+     in
+     (* We do not want to create internal array if iterator pointer has an invalid value *)
+diff --git a/infer/src/pulse/PulseOperations.ml b/infer/src/pulse/PulseOperations.ml
+index 45e6b0ff3..c9759f234 100644
+--- a/infer/src/pulse/PulseOperations.ml
++++ b/infer/src/pulse/PulseOperations.ml
+@@ -12,6 +12,7 @@ open PulseDomainInterface
+ 
+ type t = AbductiveDomain.t
+ 
++
+ type 'a access_result = ('a, Diagnostic.t * t) result
+ 
+ let ok_continue post = Ok [ExecutionDomain.ContinueProgram post]
+@@ -20,9 +21,12 @@ let check_addr_access location (address, history) astate =
+   let access_trace = Trace.Immediate {location; history} in
+   AddressAttributes.check_valid access_trace address astate
+   |> Result.map_error ~f:(fun (invalidation, invalidation_trace) ->
+-         ( Diagnostic.AccessToInvalidAddress
+-             {calling_context= []; invalidation; invalidation_trace; access_trace}
+-         , astate ) )
++        let diagnostic =
++          Diagnostic.AccessToInvalidAddress
++            {calling_context= []; invalidation; invalidation_trace; access_trace}
++        in
++        DumpTrace.dump_traces_for_ml diagnostic astate;
++         ( diagnostic, astate ) )
+ 
+ 
+ module Closures = struct
+@@ -168,7 +172,9 @@ let prune location ~condition astate =
+ 
+ 
+ let eval_deref location exp astate =
++  let orig = astate in
+   let* astate, addr_hist = eval location exp astate in
++  DumpTrace.add_transition None None orig astate;
+   let+ astate = check_addr_access location addr_hist astate in
+   Memory.eval_edge addr_hist Dereference astate
+ 
+@@ -221,7 +227,9 @@ let invalidate location cause addr_trace astate =
+ 
+ 
+ let invalidate_access location cause ref_addr_hist access astate =
++  let orig = astate in
+   let astate, (addr_obj, _) = Memory.eval_edge ref_addr_hist access astate in
++  DumpTrace.add_transition None None orig astate;
+   invalidate location cause (addr_obj, snd ref_addr_hist) astate
+ 
+ 
+@@ -271,10 +279,12 @@ let check_address_escape escape_location proc_desc address history astate =
+                  when not (is_assigned_to_global address astate) ->
+                    (* The returned address corresponds to a C++ temporary. It will have gone out of
+                       scope by now except if it was bound to a global. *)
+-                   Error
+-                     ( Diagnostic.StackVariableAddressEscape
+-                         {variable; location= escape_location; history}
+-                     , astate )
++                   let diagnostic =
++                     Diagnostic.StackVariableAddressEscape
++                       {variable; location= escape_location; history}
++                   in
++                   DumpTrace.dump_traces_for_ml diagnostic astate;
++                   Error ( diagnostic, astate )
+                | _ ->
+                    Ok () ) )
+   in
+@@ -290,9 +300,11 @@ let check_address_escape escape_location proc_desc address history astate =
+         then (
+           L.d_printfln_escaped "Stack variable address &%a detected at address %a" Var.pp variable
+             AbstractValue.pp address ;
+-          Error
+-            ( Diagnostic.StackVariableAddressEscape {variable; location= escape_location; history}
+-            , astate ) )
++          let diagnostic =
++            Diagnostic.StackVariableAddressEscape {variable; location= escape_location; history}
++          in
++          DumpTrace.dump_traces_for_ml diagnostic astate;
++          Error ( diagnostic, astate ) )
+         else Ok () )
+   in
+   let+ () = check_address_of_cpp_temporary () >>= check_address_of_stack_variable in
+@@ -323,7 +335,11 @@ let check_memory_leak_unreachable unreachable_addrs location astate =
+     match allocated_not_freed_opt with
+     | Some (procname, trace), false ->
+         (* allocated but not freed *)
+-        Error (Diagnostic.MemoryLeak {procname; location; allocation_trace= trace}, astate)
++        let diagnostic =
++          Diagnostic.MemoryLeak {procname; location; allocation_trace= trace}
++        in
++        DumpTrace.dump_traces_for_ml diagnostic astate;
++        Error (diagnostic, astate)
+     | _ ->
+         result
+   in
+@@ -477,7 +493,11 @@ let apply_callee ~caller_proc_desc callee_pname call_loc callee_exec_state ~ret
+               LatentIssue.add_call (CallEvent.Call callee_pname, call_loc) latent_issue
+             in
+             if LatentIssue.should_report astate_summary then
+-              Error (LatentIssue.to_diagnostic latent_issue, (astate_summary :> AbductiveDomain.t))
++              begin
++                let diagnostic = LatentIssue.to_diagnostic latent_issue in
++                DumpTrace.dump_traces_for_ml diagnostic (astate_summary :> AbductiveDomain.t);
++                Error (diagnostic, (astate_summary :> AbductiveDomain.t))
++              end
+             else Ok (Some (LatentAbortProgram {astate= astate_summary; latent_issue})) )
+ 
+ 
+@@ -539,6 +559,8 @@ let call ~caller_proc_desc ~(callee_data : (Procdesc.t * PulseSummary.t) option)
+                 callee_pname ;
+               Stop [post]
+           | Ok (Some post) ->
++              (* transition: callee summary -> instantiated result *)
++              DumpTrace.transition None None callee_exec_state post;
+               Continue (Ok (post :: posts))
+           | Error _ as x ->
+               Continue x )
+diff --git a/infer/src/pulse/PulsePathCondition.ml b/infer/src/pulse/PulsePathCondition.ml
+index 048c70431..a447054d8 100644
+--- a/infer/src/pulse/PulsePathCondition.ml
++++ b/infer/src/pulse/PulsePathCondition.ml
+@@ -22,9 +22,32 @@ module BoItvs = struct
+         bo_itv
+     | None ->
+         Itv.ItvPure.of_foreign_id (v :> int)
++
++  let feature_vector bo_itvs =
++    let to_num b = if b then 1 else 0 in
++    let cnf f = fold (fun _ v c -> c + (f v |> to_num)) bo_itvs 0 in
++    let v0 = cnf Itv.ItvPure.is_finite in
++    let v1 = cnf Itv.ItvPure.is_invalid in
++    let v2 = cnf Itv.ItvPure.is_lb_infty in
++    let v3 = cnf Itv.ItvPure.is_nat in
++    let v4 = cnf Itv.ItvPure.is_symbolic in
++    let v5 = cnf Itv.ItvPure.is_top in
++    let v6 = cnf Itv.ItvPure.is_zero in
++    let v7 = cnf Itv.ItvPure.is_one in
++    let v8 = cnf Itv.ItvPure.is_ge_zero in
++    let v9 = cnf Itv.ItvPure.is_le_zero in
++    [v0; v1; v2; v3; v4; v5; v6; v7; v8; v9]
+ end
+ 
+-module CItvs = PrettyPrintable.MakePPMonoMap (AbstractValue) (CItv)
++module CItvs = struct
++  include PrettyPrintable.MakePPMonoMap (AbstractValue) (CItv)
++
++  let feature_vector citvs =
++    let to_num b = if b then 1 else 0 in
++    let cnf f = fold (fun _ v c -> c + (f v |> to_num)) citvs 0 in
++    let v0 = cnf CItv.is_equal_to_zero in
++    [v0]
++end
+ 
+ (** A mash-up of several arithmetic domains. At the moment they are independent, i.e. we don't use
+     facts deduced by one domain to inform another. *)
+@@ -403,3 +426,11 @@ let as_int phi v =
+ 
+ 
+ let has_no_assumptions phi = Formula.has_no_assumptions phi.formula
++
++(** for ML *)
++let feature_vector phi =
++  let v1 = if phi.is_unsat then 1 else 0 in
++  let vs1 = BoItvs.feature_vector phi.bo_itvs in
++  let vs2 = CItvs.feature_vector phi.citvs in
++  let vs3 = Formula.feature_vector phi.formula in
++  [v1] @ vs1 @ vs2 @ vs3
+diff --git a/infer/src/pulse/PulsePathCondition.mli b/infer/src/pulse/PulsePathCondition.mli
+index 0e13de008..a432a5c33 100644
+--- a/infer/src/pulse/PulsePathCondition.mli
++++ b/infer/src/pulse/PulsePathCondition.mli
+@@ -68,3 +68,6 @@ val as_int : t -> AbstractValue.t -> int option
+ 
+ val has_no_assumptions : t -> bool
+ (** whether the current path is independent of any calling context *)
++
++(** ML feature vectors *)
++val feature_vector : t -> int list
+diff --git a/infer/src/pulse/PulsePathHistory.ml b/infer/src/pulse/PulsePathHistory.ml
+new file mode 100644
+index 000000000..18de67e79
+--- /dev/null
++++ b/infer/src/pulse/PulsePathHistory.ml
+@@ -0,0 +1,159 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++module F = Format
++module L = Logging
++
++type elem = string * int [@@deriving compare]
++
++let equal_elem (s1,n1) (s2,n2) = String.equal s1 s2 && Int.equal n1 n2
++let pp_elem f (p1,n1) = F.fprintf f "(%s@%s)" p1 (string_of_int n1)
++let pp_oelem f x =
++  match x with
++  | Some(s) -> pp_elem f s
++  | None -> F.fprintf f "(%s)" "None"
++
++module PPKey = struct
++  type t = elem * elem [@@deriving compare]
++
++  let pp f s =
++    match s with
++    | e1,e2 -> F.fprintf f "%a->%a" pp_elem e1 pp_elem e2
++end
++
++module Set = PrettyPrintable.MakePPSet (PPKey)
++
++module EKey = struct
++  type t = elem [@@deriving compare]
++
++  let pp f s = F.fprintf f "%a" pp_elem s
++end
++
++module ESet = PrettyPrintable.MakePPSet (EKey)
++module EMap = Caml.Map.Make (EKey)
++
++module SSKey = struct
++  type t = Set.t * elem [@@deriving compare]
++
++  let pp f (covpath,last) =
++    F.fprintf f "{ elems=%a;@\n lastBranch=%a; }"
++      Set.pp covpath
++      pp_elem last
++end
++
++module SSet = PrettyPrintable.MakePPSet (SSKey)
++
++(* lastBranch: None => Dead end. *)
++type t = {start: elem option; last: elem option; history: Set.t; lastBranch: elem option; lastHistory: Set.t option}
++
++let pp f e =
++  F.fprintf f "{ start={ %a };@\n last={ %a };@\n elems=%a;@\n lastBranch=%a; }"
++    pp_oelem e.start
++    pp_oelem e.last
++    Set.pp e.history
++    pp_oelem e.lastBranch
++
++let yojson_of_t = [%yojson_of: _]
++let empty = { start= None; last= None; history= Set.empty; lastBranch= None; lastHistory= None }
++let add p n s =
++  L.d_printfln "Add cover %a %a" pp_oelem s.last pp_elem (p,n);
++  match s.last with
++  | Some(po, no) when not (String.equal po p) ->
++     let nn = n * -1 in
++     { s with last= Some(p,nn); history= Set.add ((po,no),(p,nn)) s.history }
++  | Some(po, no) when not (String.equal po p && (Int.equal no n || Int.equal (no * -1) n)) ->
++     { s with last= Some(p,n); history= Set.add ((po,no),(p,n)) s.history }
++  | None -> { s with start= Some(p,n); last= Some(p,n) }
++  | _ -> s
++let adds callee caller =
++  let his = caller.history in
++  let his = Set.fold (fun s2 s -> Set.add s2 s) callee.history his in
++  let his =
++    match caller.last, callee.start with
++    | Some last, Some start -> Set.add (last, start) his
++    | _ -> his
++  in
++  let lastBranch =
++    match callee.lastBranch with
++    | Some lb -> Some lb
++    | None -> caller.lastBranch
++  in
++  let lastHistory =
++    match callee.lastHistory with
++    | Some lb -> Some lb
++    | None -> caller.lastHistory
++  in
++  { caller with last= callee.last; history= his; lastBranch; lastHistory }
++
++let update_last pn s = { s with lastBranch= Some(pn); lastHistory= Some(s.history) }
++
++let included str s = { s with history= Set.filter (fun ((p,_),_) -> String.equal p str) s.history }
++let count s = Set.cardinal s.history
++let minus s1 s2 =
++  let h1 = s1.history in
++  let h2 = s2.history in
++  { s1 with history = Set.diff h1 h2 }
++
++let unstrip str =
++  let drop c =
++    match c with
++    | ' ' | '\n' | '"' -> true
++    | _ -> false
++  in
++  let str = String.lstrip ~drop str in
++  let str = String.rstrip ~drop str in
++  str
++
++(** Splits a string [str] separated by [s] into a list of strings.
++ *  It treats a string of characters enclosed by a double quotation mark as a single string.
++ *)
++let split s str =
++  let len = (String.length str) - 1 in
++  let rec split curr pos lst mode =
++    if pos > len then
++      match mode with
++      | 0 -> curr::lst
++      | _ -> raise Exit
++    else
++      let npos = pos + 1 in
++      match String.get str pos with
++      | '"' when Int.equal mode 0 -> split curr npos lst 1
++      | '"' when Int.equal mode 1 -> split curr npos lst 0
++      | c when Char.equal s c && Int.equal mode 0 -> split "" npos (curr::lst) 0
++      | c -> split (curr^(String.make 1 c)) npos lst mode
++  in
++  if len < 0 then []
++  else List.rev (split "" 0 [] 0)
++
++
++let to_lines s = Set.fold (fun ((_,v1),(_, v2)) s -> (F.asprintf "%s->%s" (string_of_int v1) (string_of_int v2))::s) s.history [] (* TODO *)
++
++let from_line s line =
++  let list = split ' ' line in
++  match list with
++  | el1::el2::_ ->
++     let k = unstrip el1 in
++     let v = int_of_string (unstrip el2) in
++     add k v s (* TODO *)
++  | _ -> raise Exit
++
++let dead_traces: t -> SSet.t = fun t ->
++  try
++    let lastBranch =
++      match t.lastBranch with
++      | Some lastBranch -> lastBranch
++      | None -> raise Exit
++    in
++    let lastHistory =
++      match t.lastHistory with
++      | Some lastHistory -> lastHistory
++      | None -> raise Exit
++    in
++    SSet.add (lastHistory, lastBranch) SSet.empty
++  with _ -> SSet.empty
++
++let current_trace t = t.history
+diff --git a/infer/src/pulse/PulsePathHistory.mli b/infer/src/pulse/PulsePathHistory.mli
+new file mode 100644
+index 000000000..757cad646
+--- /dev/null
++++ b/infer/src/pulse/PulsePathHistory.mli
+@@ -0,0 +1,52 @@
++(*
++ * Copyright (c) Facebook, Inc. and its affiliates.
++ *
++ * This source code is licensed under the CC-BY-NC license found in the
++ * LICENSE file in the root directory of this source tree.
++ *)
++
++module F = Format
++
++type elem = string * int [@@deriving compare]
++
++type t
++
++module PPKey : sig
++  type t = elem * elem [@@deriving compare]
++  val pp : F.formatter -> t -> unit
++end
++
++module Set : PrettyPrintable.PPSet with type elt = PPKey.t
++
++module EKey : sig
++  type t = elem
++end
++
++module ESet : PrettyPrintable.PPSet with type elt = EKey.t
++module EMap : Caml.Map.S with type key = EKey.t
++
++module SSKey : sig
++  type t = Set.t * elem [@@deriving compare]
++
++  val pp : F.formatter -> t -> unit
++end
++
++module SSet : PrettyPrintable.PPSet with type elt = SSKey.t
++
++
++val pp_elem : F.formatter -> elem -> unit
++val pp : F.formatter -> t -> unit
++val yojson_of_t : t -> Yojson.Safe.t
++val empty : t
++val add : string -> int -> t -> t
++val adds : t -> t -> t
++val included : string -> t -> t
++val count : t -> int
++val to_lines : t -> string list
++val from_line : t -> string -> t
++val minus: t -> t -> t
++val equal_elem: elem -> elem -> bool
++
++val update_last: string * int -> t -> t
++val dead_traces: t -> SSet.t
++val current_trace: t -> Set.t
+diff --git a/infer/src/pulse/PulseSkippedCalls.ml b/infer/src/pulse/PulseSkippedCalls.ml
+index 2450fa5e3..31a9a47e1 100644
+--- a/infer/src/pulse/PulseSkippedCalls.ml
++++ b/infer/src/pulse/PulseSkippedCalls.ml
+@@ -23,6 +23,7 @@ module SkippedTrace = struct
+   let widen ~prev ~next ~num_iters:_ = join prev next
+ end
+ 
+-include AbstractDomain.Map (Procname) (SkippedTrace)
++module M = AbstractDomain.Map (Procname) (SkippedTrace)
++include M
+ 
+ let yojson_of_t = [%yojson_of: _]
+diff --git a/infer/src/pulse/PulseSummary.ml b/infer/src/pulse/PulseSummary.ml
+index e957f921d..9ff97890b 100644
+--- a/infer/src/pulse/PulseSummary.ml
++++ b/infer/src/pulse/PulseSummary.ml
+@@ -23,3 +23,7 @@ let of_posts pdesc posts =
+   AnalysisCallbacks.html_debug_new_node_session (Procdesc.get_exit_node pdesc)
+     ~pp_name:(fun fmt -> F.pp_print_string fmt "pulse summary creation")
+     ~f:(fun () -> ExecutionDomain.summary_of_posts pdesc posts)
++
++let dead_traces (posts: ExecutionDomain.t list) =
++  let set = PulseDeadTrace.SSet.empty in
++  List.fold posts ~init:set ~f:(fun acc x -> PulseDeadTrace.SSet.union (ExecutionDomain.dead_traces x) acc)
+diff --git a/infer/src/pulse/PulseSummary.mli b/infer/src/pulse/PulseSummary.mli
+index 1d648fd61..d8fa21e29 100644
+--- a/infer/src/pulse/PulseSummary.mli
++++ b/infer/src/pulse/PulseSummary.mli
+@@ -13,3 +13,5 @@ type t = ExecutionDomain.summary list [@@deriving yojson_of]
+ val of_posts : Procdesc.t -> ExecutionDomain.t list -> t
+ 
+ val pp : Format.formatter -> t -> unit
++
++val dead_traces : ExecutionDomain.t list -> PulseDeadTrace.SSet.t
+diff --git a/infer/src/pulse/dune b/infer/src/pulse/dune
+index 1782cb272..580d67c7f 100644
+--- a/infer/src/pulse/dune
++++ b/infer/src/pulse/dune
+@@ -9,6 +9,6 @@
+  (flags
+   (:standard -open Core -open IR -open IStdlib -open IStd -open ATDGenerated
+     -open IBase -open Absint -open BO))
+- (libraries core IStdlib ATDGenerated IBase IR Absint BO)
++ (libraries core IStdlib ATDGenerated IBase IR Absint BO pyml)
+  (preprocess
+   (pps ppx_yojson_conv ppx_compare ppx_variants_conv)))
+diff --git a/opam b/opam
+index 945cc080f..694793468 100644
+--- a/opam
++++ b/opam
+@@ -51,6 +51,7 @@ depends: [
+   "xmlm" {>="1.2.0"}
+   "yojson" {>="1.7.0"}
+   "zarith" {>="1.7"}
++  "pyml"
+ ]
+ depexts: [
+   [ ["ubuntu"] ["default-jdk"] ]
+diff --git a/opam.locked b/opam.locked
+index 89fa89d8d..0f5e713e7 100644
+--- a/opam.locked
++++ b/opam.locked
+@@ -1,6 +1,6 @@
+ opam-version: "2.0"
+ name: "infer"
+-version: "1.0.0"
++version: "1.0.0.ddinfer"
+ synopsis: "A static analyzer for Java, C, C++, and Objective-C"
+ maintainer: "the infer team"
+ authors: "Facebook"
+@@ -54,7 +54,7 @@ depends: [
+   "cppo" {= "1.6.6"}
+   "csexp" {= "1.3.1"}
+   "ctypes" {= "0.17.1"}
+-  "dune" {= "2.7.1"}
++  "dune" {= "2.9.1"}
+   "dune-configurator" {= "2.7.1"}
+   "easy-format" {= "1.3.2"}
+   "extlib" {= "1.7.7"}
+@@ -119,6 +119,7 @@ depends: [
+   "ppxfind" {= "1.4"}
+   "ppxlib" {= "0.15.0"}
+   "protocol_version_header" {= "v0.14.0"}
++  "pyml" {= "20210924"}
+   "re" {= "1.9.0"}
+   "result" {= "1.5"}
+   "sawja" {= "1.5.8"}
+@@ -128,6 +129,7 @@ depends: [
+   "spawn" {= "v0.13.0"}
+   "splittable_random" {= "v0.14.0"}
+   "sqlite3" {= "5.0.2"}
++  "stdcompat" {= "17"}
+   "stdio" {= "v0.14.0"}
+   "stdlib-shims" {= "0.1.0"}
+   "textutils" {= "v0.14.0"}
+-- 
+2.34.1
+

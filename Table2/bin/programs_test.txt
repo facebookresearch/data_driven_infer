@@ -1,0 +1,15 @@
+httpd-2.5.1
+sqlite-3.37.0
+openssl-3.1.0
+vim-8.2.2451
+cpython-3.11.0
+git-2.30.0
+gettext-0.21
+freeipmi-1.6.6
+gnucobol-3.1.2
+redis-6.0.10
+bluez-5.55
+DyLP-1.10.4
+gnuastro-0.14
+nasm-2.15.01
+gawk-5.1.0
